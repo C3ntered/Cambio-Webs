@@ -1,0 +1,303 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Cambio Card Game</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        #lobby {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            margin-bottom: 20px;
+        }
+        #lobby input {
+            display: block;
+            width: 100%;
+            padding: 10px;
+            margin: 10px 0;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            box-sizing: border-box;
+        }
+        #lobby button {
+            background-color: #4CAF50;
+            color: white;
+            padding: 10px 20px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 16px;
+        }
+        #lobby button:hover {
+            background-color: #45a049;
+        }
+        #status {
+            margin-top: 10px;
+            color: #666;
+        }
+        #game-board {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        #turn-indicator {
+            background-color: #2196F3;
+            color: white;
+            padding: 15px;
+            border-radius: 4px;
+            text-align: center;
+        }
+        #discard-pile {
+            margin: 20px 0;
+            padding: 15px;
+            background-color: #f9f9f9;
+            border-radius: 4px;
+        }
+        #opponents-hands {
+            margin: 20px 0;
+            padding: 15px;
+            background-color: #e8f5e9;
+            border-radius: 4px;
+        }
+        #opponents-hands h3 {
+            font-size: 14px;
+            margin-bottom: 10px;
+            color: #2e7d32;
+        }
+        .opponent-hand {
+            margin: 15px 0;
+        }
+        .opponent-hand .opponent-name {
+            font-weight: bold;
+            margin-bottom: 8px;
+        }
+        .opponent-cards {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 8px;
+            max-width: 320px;
+        }
+        .opponent-cards button {
+            padding: 12px 10px;
+            font-size: 20px;
+            border: 2px solid #333;
+            border-radius: 6px;
+            background: linear-gradient(135deg, #1a237e 0%, #283593 100%);
+            color: white;
+            cursor: pointer;
+            min-height: 60px;
+        }
+        .opponent-cards button:hover {
+            background: linear-gradient(135deg, #283593 0%, #3949ab 100%);
+        }
+        .opponent-cards button:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+        #top-card {
+            font-size: 24px;
+            font-weight: bold;
+            text-align: center;
+            padding: 20px;
+            background-color: white;
+            border: 2px solid #333;
+            border-radius: 4px;
+            margin-top: 10px;
+        }
+        #my-hand h3 {
+            margin-top: 20px;
+        }
+        .action-buttons {
+            margin: 20px 0;
+            display: flex;
+            gap: 10px;
+        }
+        .action-buttons button {
+            padding: 15px 30px;
+            font-size: 16px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            background-color: #2196F3;
+            color: white;
+        }
+        .action-buttons button:hover {
+            background-color: #1976D2;
+        }
+        .action-buttons button:disabled {
+            background-color: #ccc;
+            cursor: not-allowed;
+        }
+        #card-container {
+            display: grid;
+            gap: 12px;
+            margin-top: 10px;
+        }
+        #card-container.cols-2 {
+            grid-template-columns: repeat(2, 1fr);
+            max-width: 280px;
+        }
+        #card-container.cols-3 {
+            grid-template-columns: repeat(3, 1fr);
+            max-width: 420px;
+        }
+        #card-container button {
+            padding: 20px 16px;
+            font-size: 14px;
+            border: 2px solid #333;
+            border-radius: 8px;
+            background-color: white;
+            cursor: pointer;
+            min-height: 90px;
+            width: 100%;
+            box-sizing: border-box;
+        }
+        #card-container button:hover {
+            background-color: #e0e0e0;
+        }
+        #notifications {
+            margin-top: 20px;
+            padding: 10px;
+            background-color: #f0f0f0;
+            border-radius: 4px;
+            max-height: 200px;
+            overflow-y: auto;
+        }
+        #notifications div {
+            padding: 5px;
+            margin: 5px 0;
+            background-color: white;
+            border-radius: 3px;
+        }
+        #room-info {
+            background-color: #4CAF50;
+            color: white;
+            padding: 15px;
+            border-radius: 4px;
+            margin-bottom: 20px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        #room-id-display {
+            font-size: 18px;
+            font-weight: bold;
+            font-family: monospace;
+        }
+        #copy-room-id {
+            background-color: rgba(255, 255, 255, 0.2);
+            color: white;
+            border: 2px solid white;
+            padding: 8px 16px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+        }
+        #copy-room-id:hover {
+            background-color: rgba(255, 255, 255, 0.3);
+        }
+        #copy-room-id.copied {
+            background-color: white;
+            color: #4CAF50;
+        }
+        #player-list {
+            background-color: #f9f9f9;
+            padding: 15px;
+            border-radius: 4px;
+            margin: 20px 0;
+        }
+        #player-list h3 {
+            margin-top: 0;
+        }
+        #player-list ul {
+            list-style: none;
+            padding: 0;
+        }
+        #player-list li {
+            padding: 8px;
+            margin: 5px 0;
+            background-color: white;
+            border-radius: 4px;
+        }
+        #start-game-btn {
+            background-color: #4CAF50;
+            color: white;
+            padding: 15px 30px;
+            font-size: 18px;
+            font-weight: bold;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            margin: 20px 0;
+            width: 100%;
+        }
+        #start-game-btn:hover:not(:disabled) {
+            background-color: #45a049;
+        }
+        #start-game-btn:disabled {
+            background-color: #ccc;
+            cursor: not-allowed;
+        }
+    </style>
+</head>
+<body>
+    <h1>Cambio Card Game</h1>
+    
+    <div id="lobby">
+        <input type="text" id="username" placeholder="Enter username">
+        <input type="text" id="room-id" placeholder="Room ID (leave blank to create)">
+        <button onclick="handleJoin()">Join Game</button>
+        <p id="status"></p>
+    </div>
+
+    <div id="game-board" style="display:none">
+        <div id="room-info">
+            <div>
+                <strong>Room ID:</strong> <span id="room-id-display">-</span>
+                <span style="margin-left: 15px; font-size: 14px;">Share this ID with other players to join your game</span>
+            </div>
+            <button id="copy-room-id" onclick="copyRoomId()">Copy Room ID</button>
+        </div>
+        <div id="player-list">
+            <h3>Players</h3>
+        </div>
+        <button id="start-game-btn" onclick="startGame()" style="display:none;">Start Game</button>
+        <h2 id="turn-indicator">Waiting for players...</h2>
+        <div id="discard-pile">
+            <h3>Discard pile</h3>
+            <div id="top-card"></div>
+        </div>
+        <div id="opponents-hands">
+            <h3>Other players (click a face-down card to eliminate if you've memorized it)</h3>
+            <div id="opponents-container"></div>
+        </div>
+        <div id="my-hand">
+            <h3>Your hand</h3>
+            <div id="viewing-countdown" style="display:none; font-size: 48px; text-align: center; margin: 10px 0; color: #FF9800;"></div>
+            <div id="draw-choice-panel" style="display:none; padding: 15px; background: #fff3e0; border-radius: 8px; margin: 15px 0; border: 2px solid #ff9800;">
+                <p><strong>You drew:</strong> <span id="drawn-card-display"></span></p>
+                <p>Swap with a hand card (any card), or discard to pile (must match top):</p>
+                <button id="discard-drawn-btn" onclick="resolveDraw('discard')">Discard to pile</button>
+            </div>
+            <div class="action-buttons">
+                <button id="draw-card-btn" onclick="drawCard()">Draw Card</button>
+                <button onclick="callCambio()">Call Cambio</button>
+            </div>
+            <div id="card-container"></div>
+        </div>
+        <div id="notifications"></div>
+    </div>
+
+    <script src="/static/bridge.js"></script>
+</body>
+</html>
