@@ -289,6 +289,10 @@ function drawCard() {
     sendMessage('draw_card');
 }
 
+function drawFromDiscard() {
+    sendMessage('draw_from_discard');
+}
+
 function resolveDraw(action, cardIndex) {
     const payload = { action };
     if (action === 'swap' && cardIndex !== undefined) {
@@ -552,10 +556,39 @@ function renderBoard(room, yourPlayerId) {
             if (pendingDrawnCard) {
                 drawChoicePanel.style.display = 'block';
                 drawnCardDisplay.textContent = formatCard(pendingDrawnCard);
+
+                // If drawn from discard pile, you cannot discard it again
+                if (discardDrawnBtn) {
+                     // Check if last draw source was discard
+                     const me = room.players.find(p => p.player_id === yourPlayerId);
+                     if (me && me.last_draw_source === 'discard') {
+                         discardDrawnBtn.style.display = 'none';
+                         // Add note
+                         let note = document.getElementById('swap-only-note');
+                         if (!note) {
+                             note = document.createElement('p');
+                             note.id = 'swap-only-note';
+                             note.style.color = 'red';
+                             note.innerText = 'You must swap when drawing from discard pile.';
+                             drawChoicePanel.appendChild(note);
+                         } else {
+                             note.style.display = 'block';
+                         }
+                     } else {
+                         discardDrawnBtn.style.display = 'inline-block';
+                         const note = document.getElementById('swap-only-note');
+                         if (note) note.style.display = 'none';
+                     }
+                }
+
                 if (drawCardBtn) drawCardBtn.disabled = true;
+                const drawDiscardBtn = document.getElementById('draw-discard-btn');
+                if (drawDiscardBtn) drawDiscardBtn.disabled = true;
             } else {
                 drawChoicePanel.style.display = 'none';
                 if (drawCardBtn) drawCardBtn.disabled = false;
+                const drawDiscardBtn = document.getElementById('draw-discard-btn');
+                if (drawDiscardBtn) drawDiscardBtn.disabled = false;
             }
         }
         
@@ -837,6 +870,7 @@ async function handleJoin() {
 window.joinGame = joinGame;
 window.handleJoin = handleJoin;
 window.drawCard = drawCard;
+window.drawFromDiscard = drawFromDiscard;
 window.playCard = playCard;
 window.eliminateCard = eliminateCard;
 window.resolveDraw = resolveDraw;

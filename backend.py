@@ -370,14 +370,21 @@ class GameRoomManager:
         room = self.rooms.get(room_id)
         if not room:
             return None
-        lowest_score = None
-        winner_id = None
+
+        # Calculate scores
         for player in room.players:
-            score = sum(get_card_value(card) for card in player.hand)
-            player.score = score
-            if lowest_score is None or score < lowest_score:
-                lowest_score = score
-                winner_id = player.player_id
+            player.score = sum(get_card_value(card) for card in player.hand)
+
+        # Determine winner: Lowest score, tie-breaker: fewest cards
+        # Sort players by score (asc), then by hand size (asc)
+        sorted_players = sorted(
+            room.players,
+            key=lambda p: (p.score, len(p.hand))
+        )
+
+        winner = sorted_players[0] if sorted_players else None
+        winner_id = winner.player_id if winner else None
+
         if winner_id:
             self.end_game(room_id, winner_id)
         return winner_id
@@ -880,6 +887,48 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
                     }
                 }, exclude_player=player_id)
 
+            elif msg_type == "draw_from_discard":
+                # Draw a card from discard pile (must swap)
+                # Check if game is still active
+                if room.status != GameStatus.PLAYING:
+                    await websocket.send_json({"type": "error", "message": "Game is not active"})
+                    continue
+
+                if room.game_state.current_turn != player_id:
+                    await websocket.send_json({"type": "error", "message": "Not your turn"})
+                    continue
+
+                if player.pending_drawn_card:
+                    await websocket.send_json({"type": "error", "message": "Resolve your drawn card first"})
+                    continue
+
+                if not room.game_state.discard_pile:
+                    await websocket.send_json({"type": "error", "message": "Discard pile is empty"})
+                    continue
+
+                drawn_card = room.game_state.discard_pile.pop()
+                player.pending_drawn_card = drawn_card
+                player.last_draw_source = "discard"
+                player.last_drawn_card = drawn_card
+
+                await websocket.send_json({
+                    "type": "card_drawn",
+                    "data": {
+                        "card": drawn_card.model_dump(mode='json'),
+                        "room": room.model_dump(mode='json'),
+                        "source": "discard"
+                    }
+                })
+
+                await room_manager.broadcast_to_room(room_id, {
+                    "type": "player_drew_card",
+                    "data": {
+                        "player_id": player_id,
+                        "room": get_room_dict_for_broadcast(room, hide_pending_for_player=player_id),
+                        "source": "discard"
+                    }
+                }, exclude_player=player_id)
+
             elif msg_type == "resolve_draw":
                 # Handle the player's choice after drawing: 'swap' or 'discard'
                 action = message.get("data", {}).get("action")
@@ -923,6 +972,11 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
                         })
 
                 elif action == "discard":
+                    # You can only discard if you drew from the deck
+                    if player.last_draw_source == "discard":
+                        await websocket.send_json({"type": "error", "message": "You must swap when drawing from discard pile"})
+                        continue
+
                     # Discard the drawn card. No matching required as we are just discarding the card we drew.
                     # "You can then choose to discard the card you drew"
                     card = player.pending_drawn_card
