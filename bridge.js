@@ -16,6 +16,12 @@ const getApiBase = () => {
 
 const API_BASE = getApiBase();
 
+// Durations and Timeouts (in milliseconds)
+const REVEAL_DURATION = 5000;
+const VIEWING_DURATION = 5000;
+const NOTIFY_DURATION_LONG = 10000;
+const COPY_FEEDBACK_DURATION = 2000;
+
 let socket = null;
 let playerContext = {
     username: null,
@@ -123,7 +129,7 @@ function handleSocketMessage(event) {
             const winnerId = message.data.winner_id;
             const winnerName = message.data.winner_username;
             alert(`Game Over! Winner: ${winnerName}`);
-            notify(`Game Over! Winner: ${winnerName} (Score: ${latestRoomState.players.find(p=>p.player_id === winnerId)?.score})`, 10000);
+            notify(`Game Over! Winner: ${winnerName} (Score: ${latestRoomState.players.find(p=>p.player_id === winnerId)?.score})`, NOTIFY_DURATION_LONG);
 
             pendingDrawnCard = null;
             pendingAbility = null;
@@ -190,14 +196,14 @@ function handleSocketMessage(event) {
                     setTimeout(() => {
                         cardButton.innerText = originalText;
                         cardButton.classList.remove('revealed');
-                    }, duration || 5000);
+                    }, duration || REVEAL_DURATION);
                 }
             } else if (ability === 'peek_other') {
                 if (latestRoomState) {
                     const targetPlayer = latestRoomState.players.find(p => p.player_id === target_player_id);
                     const targetUsername = targetPlayer ? targetPlayer.username : 'another player';
                     const text = `You see ${targetUsername}'s card #${card_index + 1}: ${formatCard(card)}`;
-                    notify(text, duration || 5000);
+                    notify(text, duration || REVEAL_DURATION);
                     alert(text); // Also show alert for explicit visibility
                 }
             } else if (ability === 'look_and_swap' && first && second) {
@@ -231,7 +237,7 @@ function handleSocketMessage(event) {
                         setTimeout(() => {
                             btn.innerText = originalText;
                             btn.classList.remove('revealed');
-                        }, 5000);
+                        }, REVEAL_DURATION);
                     }
                 };
 
@@ -628,7 +634,7 @@ function renderBoard(room, yourPlayerId) {
                 // Countdown display
                 const countdownEl = document.getElementById('viewing-countdown');
                 if (countdownEl) {
-                    let secs = 5;
+                    let secs = VIEWING_DURATION / 1000;
                     countdownEl.textContent = secs;
                     countdownEl.style.display = 'block';
                     const countInterval = setInterval(() => {
@@ -643,7 +649,7 @@ function renderBoard(room, yourPlayerId) {
                     if (marker.parentNode) marker.parentNode.removeChild(marker);
                     const ce = document.getElementById('viewing-countdown');
                     if (ce) ce.style.display = 'none';
-                }, 5000);
+                }, VIEWING_DURATION);
             }
 
             if (me) {
@@ -782,7 +788,7 @@ function copyRoomId() {
             setTimeout(() => {
                 button.innerText = originalText;
                 button.classList.remove('copied');
-            }, 2000);
+            }, COPY_FEEDBACK_DURATION);
         }
         notify(`Room ID "${roomId}" copied to clipboard!`);
     }).catch(err => {
