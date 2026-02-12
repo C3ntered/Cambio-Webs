@@ -1319,6 +1319,45 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
                         "your_player_id": player_id
                     }
                 })
+
+            elif msg_type == "play_again":
+                # Reset game state to waiting
+                if room.status != GameStatus.FINISHED:
+                    await websocket.send_json({
+                        "type": "error",
+                        "message": "Game is not finished yet"
+                    })
+                    continue
+
+                # Reset game state
+                room.status = GameStatus.WAITING
+                room.game_state = GameState()
+
+                # Reset player hands and states (but keep scores? User said "Play Again" usually implies fresh start or round.
+                # Let's keep scores if they want to track rounds, but clear hands.)
+                # "it bring us back to the start lobby and shows the players" -> usually implies full reset or new round.
+                # Let's reset everything for a fresh game as per "bring us back to the start lobby".
+                for p in room.players:
+                    p.hand = []
+                    p.last_draw_source = None
+                    p.last_drawn_card = None
+                    p.pending_drawn_card = None
+                    p.pending_ability = None
+                    p.pending_swap_targets = None
+                    # Optional: Reset score if it's a new game? Or keep for session?
+                    # "bring us back to the start lobby" sounds like a full reset.
+                    # But often friends play multiple rounds. Let's keep scores for now?
+                    # User: "shows the players".
+                    # Let's NOT reset scores so they can see who is winning overall.
+
+                # Broadcast reset
+                await room_manager.broadcast_to_room(room_id, {
+                    "type": "game_reset",
+                    "data": {
+                        "room": room.model_dump(mode='json'),
+                        "message": f"{player.username} requested to play again."
+                    }
+                })
             
             else:
                 await websocket.send_json({

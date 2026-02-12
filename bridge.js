@@ -119,6 +119,25 @@ function handleSocketMessage(event) {
         case 'deck_reshuffled':
         case 'cambio_called':
         case 'game_ended':
+            // Show winner
+            const winnerId = message.data.winner_id;
+            const winnerName = message.data.winner_username;
+            alert(`Game Over! Winner: ${winnerName}`);
+            notify(`Game Over! Winner: ${winnerName} (Score: ${latestRoomState.players.find(p=>p.player_id === winnerId)?.score})`, 10000);
+
+            pendingDrawnCard = null;
+            pendingAbility = null;
+            selectingTargets = false;
+            selectedTargets = [];
+            pendingSwapDecision = false;
+            latestRoomState = message.data.room;
+            renderBoard(message.data.room, message.data.your_player_id || playerContext.playerId);
+            break;
+        case 'game_reset':
+            notify(message.data.message);
+            latestRoomState = message.data.room;
+            renderBoard(message.data.room, playerContext.playerId);
+            break;
         case 'game_started':
         case 'round_started':
         case 'turn_ended':
@@ -298,6 +317,10 @@ function startGame() {
     sendMessage('start_game');
 }
 
+function playAgain() {
+    sendMessage('play_again');
+}
+
 function resolveSwapDecision(doSwap) {
     sendMessage('resolve_swap_decision', { swap: doSwap });
     pendingSwapDecision = false;
@@ -448,16 +471,28 @@ function renderBoard(room, yourPlayerId) {
     const startGameBtn = document.getElementById('start-game-btn');
     if (startGameBtn) {
         const isWaiting = room.status === 'waiting' || room.status === 'WAITING';
+        const isFinished = room.status === 'finished' || room.status === 'FINISHED';
+
         if (isWaiting) {
             if (room.players.length >= room.min_players) {
                 startGameBtn.style.display = 'block';
                 startGameBtn.disabled = false;
                 startGameBtn.title = 'Click to start the game';
+                startGameBtn.innerText = 'Start Game';
+                startGameBtn.onclick = startGame;
             } else {
                 startGameBtn.style.display = 'block';
                 startGameBtn.disabled = true;
                 startGameBtn.title = `Need at least ${room.min_players} players to start (currently ${room.players.length})`;
+                startGameBtn.innerText = 'Start Game';
+                startGameBtn.onclick = null;
             }
+        } else if (isFinished) {
+            startGameBtn.style.display = 'block';
+            startGameBtn.disabled = false;
+            startGameBtn.innerText = 'Play Again';
+            startGameBtn.onclick = playAgain;
+            startGameBtn.title = 'Click to return to lobby and play again';
         } else {
             startGameBtn.style.display = 'none';
         }
@@ -622,14 +657,22 @@ function renderBoard(room, yourPlayerId) {
                     btn.innerText = isVisible ? formatCard(card) : "🂠";
                     btn.title = isViewingPhase ? (isBottomCard ? 'Memorize this card!' : 'Face down') : (isAwaitingDrawChoice ? `Click to swap with drawn card` : `Card #${index + 1}`);
                     if (!isViewingPhase) {
+                        // Priority 1: Selecting targets (Abilities)
                         if (selectingTargets) {
-                            btn.addEventListener('click', () => handleCardClick(yourPlayerId, index, true));
+                            btn.addEventListener('click', (e) => {
+                                e.stopPropagation(); // Stop bubbling
+                                handleCardClick(yourPlayerId, index, true);
+                            });
                             btn.style.borderColor = "#00acc1";
                             btn.style.cursor = "pointer";
                             btn.innerText = "🎯";
-                        } else if (isAwaitingDrawChoice) {
+                        }
+                        // Priority 2: Swapping drawn card (Draw phase)
+                        else if (isAwaitingDrawChoice) {
                             btn.addEventListener('click', () => resolveDraw('swap', index));
-                        } else {
+                        }
+                        // Priority 3: Default play/eliminate (Normal phase)
+                        else {
                             btn.addEventListener('click', () => playCard(card));
                         }
                     } else {
@@ -662,12 +705,18 @@ function renderBoard(room, yourPlayerId) {
                     btn.innerText = '🂠';
                     btn.title = !mustResolveDraw ? `Try to eliminate ${player.username}'s card #${index + 1} (must match discard)` : (mustResolveDraw ? 'Resolve your drawn card first' : 'Face down');
 
+                    // Priority 1: Selecting targets (Abilities)
                     if (selectingTargets) {
-                         btn.addEventListener('click', () => handleCardClick(player.player_id, index, false));
+                         btn.addEventListener('click', (e) => {
+                             e.stopPropagation(); // Stop bubbling
+                             handleCardClick(player.player_id, index, false);
+                         });
                          btn.style.borderColor = "#00acc1";
                          btn.style.cursor = "pointer";
                          btn.innerText = "🎯";
-                    } else if (!mustResolveDraw) {
+                    }
+                    // Priority 2: Elimination (Normal phase, if no draw pending)
+                    else if (!mustResolveDraw) {
                         btn.addEventListener('click', () => eliminateCard(player.player_id, index));
                     } else {
                         btn.disabled = true;
@@ -774,4 +823,5 @@ window.resolveDraw = resolveDraw;
 window.callCambio = callCambio;
 window.copyRoomId = copyRoomId;
 window.startGame = startGame;
+window.playAgain = playAgain;
 window.skipAbility = skipAbility;
