@@ -28,6 +28,7 @@ let pendingAbility = null;    // Ability available to use
 let selectingTargets = false; // Mode for selecting targets
 let selectedTargets = [];     // Targets selected so far
 let pendingSwapDecision = false; // Mode for deciding whether to swap
+let adminMode = false; // Admin debug mode to see all cards
 
 async function joinGame(username, roomId = null) {
     if (!username) {
@@ -119,11 +120,13 @@ function handleSocketMessage(event) {
         case 'deck_reshuffled':
         case 'cambio_called':
         case 'game_ended':
-            // Show winner
-            const winnerId = message.data.winner_id;
-            const winnerName = message.data.winner_username;
-            alert(`Game Over! Winner: ${winnerName}`);
-            notify(`Game Over! Winner: ${winnerName} (Score: ${latestRoomState.players.find(p=>p.player_id === winnerId)?.score})`, 10000);
+            // Show winner only if we have a winner
+            if (message.data.winner_id) {
+                const winnerId = message.data.winner_id;
+                const winnerName = message.data.winner_username;
+                alert(`Game Over! Winner: ${winnerName}`);
+                notify(`Game Over! Winner: ${winnerName} (Score: ${latestRoomState.players.find(p=>p.player_id === winnerId)?.score})`, 10000);
+            }
 
             pendingDrawnCard = null;
             pendingAbility = null;
@@ -700,9 +703,16 @@ function renderBoard(room, yourPlayerId) {
                 section.appendChild(nameEl);
                 const cardsDiv = document.createElement('div');
                 cardsDiv.className = 'opponent-cards';
-                player.hand.forEach((_, index) => {
+                player.hand.forEach((card, index) => {
                     const btn = document.createElement('button');
-                    btn.innerText = '🂠';
+                    if (adminMode) {
+                        btn.innerText = formatCard(card);
+                        btn.style.background = "#e3f2fd";
+                        btn.style.color = "#000";
+                        btn.style.fontSize = "14px";
+                    } else {
+                        btn.innerText = '🂠';
+                    }
                     btn.title = !mustResolveDraw ? `Try to eliminate ${player.username}'s card #${index + 1} (must match discard)` : (mustResolveDraw ? 'Resolve your drawn card first' : 'Face down');
 
                     // Priority 1: Selecting targets (Abilities)
@@ -762,6 +772,16 @@ function updateStatus(status) {
     const statusEl = document.getElementById('status');
     if (statusEl) {
         statusEl.innerText = status;
+    }
+}
+
+function toggleAdminMode() {
+    const checkbox = document.getElementById('admin-mode-toggle');
+    if (checkbox) {
+        adminMode = checkbox.checked;
+        if (latestRoomState) {
+            renderBoard(latestRoomState, playerContext.playerId);
+        }
     }
 }
 
@@ -825,3 +845,4 @@ window.copyRoomId = copyRoomId;
 window.startGame = startGame;
 window.playAgain = playAgain;
 window.skipAbility = skipAbility;
+window.toggleAdminMode = toggleAdminMode;
