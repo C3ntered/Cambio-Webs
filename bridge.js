@@ -27,6 +27,7 @@ let pendingDrawnCard = null;  // Card drawn, awaiting swap or discard
 let pendingAbility = null;    // Ability available to use
 let selectingTargets = false; // Mode for selecting targets
 let selectedTargets = [];     // Targets selected so far
+let pendingSwapDecision = false; // Mode for deciding whether to swap
 
 async function joinGame(username, roomId = null) {
     if (!username) {
@@ -118,6 +119,25 @@ function handleSocketMessage(event) {
         case 'deck_reshuffled':
         case 'cambio_called':
         case 'game_ended':
+            // Show winner
+            const winnerId = message.data.winner_id;
+            const winnerName = message.data.winner_username;
+            alert(`Game Over! Winner: ${winnerName}`);
+            notify(`Game Over! Winner: ${winnerName} (Score: ${latestRoomState.players.find(p=>p.player_id === winnerId)?.score})`, 10000);
+
+            pendingDrawnCard = null;
+            pendingAbility = null;
+            selectingTargets = false;
+            selectedTargets = [];
+            pendingSwapDecision = false;
+            latestRoomState = message.data.room;
+            renderBoard(message.data.room, message.data.your_player_id || playerContext.playerId);
+            break;
+        case 'game_reset':
+            notify(message.data.message);
+            latestRoomState = message.data.room;
+            renderBoard(message.data.room, playerContext.playerId);
+            break;
         case 'game_started':
         case 'round_started':
         case 'turn_ended':
@@ -125,6 +145,7 @@ function handleSocketMessage(event) {
             pendingAbility = null;
             selectingTargets = false;
             selectedTargets = [];
+            pendingSwapDecision = false;
             latestRoomState = message.data.room;
             renderBoard(message.data.room, message.data.your_player_id || playerContext.playerId);
             break;
@@ -151,8 +172,8 @@ function handleSocketMessage(event) {
             pendingAbility = message.data.ability;
             notify(message.data.message);
             latestRoomState = message.data.room;
-            renderBoard(message.data.room, playerContext.playerId);
             startAbilitySelection(pendingAbility);
+            renderBoard(message.data.room, playerContext.playerId);
             break;
         case 'ability_resolution':
             const { ability, card, card_index, target_player_id, duration, first, second } = message.data;
@@ -180,15 +201,50 @@ function handleSocketMessage(event) {
                     alert(text); // Also show alert for explicit visibility
                 }
             } else if (ability === 'look_and_swap' && first && second) {
+                // Reveal the cards visually
+                const revealCard = (pid, idx, c) => {
+                    const selector = pid === playerContext.playerId
+                        ? `#card-container > button:nth-child(${idx + 1})`
+                        : `#opponents-container .opponent-hand:has(.opponent-name:contains('${latestRoomState.players.find(p => p.player_id === pid)?.username}')) .opponent-cards button:nth-child(${idx + 1})`;
+
+                    // Simple logic for finding the button. For opponents, it's tricky with :contains, let's just use index if we can find the player section.
+                    let btn = null;
+                    if (pid === playerContext.playerId) {
+                         const container = document.getElementById('card-container');
+                         if (container) btn = container.children[idx];
+                    } else {
+                        // Find opponent section
+                        const oppContainer = document.getElementById('opponents-container');
+                        if (oppContainer) {
+                            const oppIndex = latestRoomState.players.filter(p => p.player_id !== playerContext.playerId).findIndex(p => p.player_id === pid);
+                            if (oppIndex !== -1 && oppContainer.children[oppIndex]) {
+                                const cardsDiv = oppContainer.children[oppIndex].querySelector('.opponent-cards');
+                                if (cardsDiv) btn = cardsDiv.children[idx];
+                            }
+                        }
+                    }
+
+                    if (btn) {
+                        const originalText = btn.innerText;
+                        btn.innerText = formatCard(c);
+                        btn.classList.add('revealed');
+                        setTimeout(() => {
+                            btn.innerText = originalText;
+                            btn.classList.remove('revealed');
+                        }, 5000);
+                    }
+                };
+
+                revealCard(first.player_id, first.card_index, first.card);
+                revealCard(second.player_id, second.card_index, second.card);
+
+                // Show swap decision UI
+                pendingSwapDecision = true;
                 const p1 = latestRoomState.players.find(p => p.player_id === first.player_id);
                 const p2 = latestRoomState.players.find(p => p.player_id === second.player_id);
-                const msg = `Card 1 (${p1.username}): ${formatCard(first.card)}\nCard 2 (${p2.username}): ${formatCard(second.card)}`;
+                notify(`You saw: ${formatCard(first.card)} (${p1.username}) and ${formatCard(second.card)} (${p2.username})`);
 
-                // Use timeout to allow UI updates if any before confirm
-                setTimeout(() => {
-                    const doSwap = confirm(msg + "\n\nDo you want to swap them?");
-                    sendMessage('resolve_swap_decision', { swap: doSwap });
-                }, 100);
+                renderBoard(latestRoomState, playerContext.playerId);
             } else {
                 notify(`Ability result: ${JSON.stringify(message.data)}`);
             }
@@ -259,6 +315,17 @@ function callCambio() {
 
 function startGame() {
     sendMessage('start_game');
+}
+
+function playAgain() {
+    sendMessage('play_again');
+}
+
+function resolveSwapDecision(doSwap) {
+    sendMessage('resolve_swap_decision', { swap: doSwap });
+    pendingSwapDecision = false;
+    const panel = document.getElementById('ability-panel');
+    if (panel) panel.style.display = 'none';
 }
 
 function skipAbility() {
@@ -404,16 +471,28 @@ function renderBoard(room, yourPlayerId) {
     const startGameBtn = document.getElementById('start-game-btn');
     if (startGameBtn) {
         const isWaiting = room.status === 'waiting' || room.status === 'WAITING';
+        const isFinished = room.status === 'finished' || room.status === 'FINISHED';
+
         if (isWaiting) {
             if (room.players.length >= room.min_players) {
                 startGameBtn.style.display = 'block';
                 startGameBtn.disabled = false;
                 startGameBtn.title = 'Click to start the game';
+                startGameBtn.innerText = 'Start Game';
+                startGameBtn.onclick = startGame;
             } else {
                 startGameBtn.style.display = 'block';
                 startGameBtn.disabled = true;
                 startGameBtn.title = `Need at least ${room.min_players} players to start (currently ${room.players.length})`;
+                startGameBtn.innerText = 'Start Game';
+                startGameBtn.onclick = null;
             }
+        } else if (isFinished) {
+            startGameBtn.style.display = 'block';
+            startGameBtn.disabled = false;
+            startGameBtn.innerText = 'Play Again';
+            startGameBtn.onclick = playAgain;
+            startGameBtn.title = 'Click to return to lobby and play again';
         } else {
             startGameBtn.style.display = 'none';
         }
@@ -480,7 +559,29 @@ function renderBoard(room, yourPlayerId) {
         // Ability panel visibility
         const abilityPanel = document.getElementById('ability-panel');
         if (abilityPanel) {
-            abilityPanel.style.display = pendingAbility ? 'block' : 'none';
+            if (pendingSwapDecision) {
+                abilityPanel.style.display = 'block';
+                const nameDisplay = document.getElementById('ability-name-display');
+                const desc = document.getElementById('ability-desc');
+                const controls = document.getElementById('ability-controls');
+
+                if (nameDisplay) nameDisplay.innerText = "Swap Decision";
+                if (desc) desc.innerText = "Do you want to swap the cards you just saw?";
+                if (controls) {
+                    controls.innerHTML = `
+                        <button onclick="resolveSwapDecision(true)" style="background-color: #4CAF50; margin-right: 10px;">Swap</button>
+                        <button onclick="resolveSwapDecision(false)" style="background-color: #f44336;">Keep</button>
+                    `;
+                }
+                // Hide Skip Ability button during decision if possible, or repurpose it?
+                // The main skip button is outside controls div in HTML. We might want to hide it.
+                // But let's leave it for now.
+            } else {
+                abilityPanel.style.display = pendingAbility ? 'block' : 'none';
+                // Clear controls if not decision
+                const controls = document.getElementById('ability-controls');
+                if (controls && !pendingAbility) controls.innerHTML = '';
+            }
         }
 
         const callCambioBtn = document.getElementById('call-cambio-btn');
@@ -556,14 +657,22 @@ function renderBoard(room, yourPlayerId) {
                     btn.innerText = isVisible ? formatCard(card) : "🂠";
                     btn.title = isViewingPhase ? (isBottomCard ? 'Memorize this card!' : 'Face down') : (isAwaitingDrawChoice ? `Click to swap with drawn card` : `Card #${index + 1}`);
                     if (!isViewingPhase) {
+                        // Priority 1: Selecting targets (Abilities)
                         if (selectingTargets) {
-                            btn.addEventListener('click', () => handleCardClick(yourPlayerId, index, true));
+                            btn.addEventListener('click', (e) => {
+                                e.stopPropagation(); // Stop bubbling
+                                handleCardClick(yourPlayerId, index, true);
+                            });
                             btn.style.borderColor = "#00acc1";
                             btn.style.cursor = "pointer";
                             btn.innerText = "🎯";
-                        } else if (isAwaitingDrawChoice) {
+                        }
+                        // Priority 2: Swapping drawn card (Draw phase)
+                        else if (isAwaitingDrawChoice) {
                             btn.addEventListener('click', () => resolveDraw('swap', index));
-                        } else {
+                        }
+                        // Priority 3: Default play/eliminate (Normal phase)
+                        else {
                             btn.addEventListener('click', () => playCard(card));
                         }
                     } else {
@@ -596,12 +705,18 @@ function renderBoard(room, yourPlayerId) {
                     btn.innerText = '🂠';
                     btn.title = !mustResolveDraw ? `Try to eliminate ${player.username}'s card #${index + 1} (must match discard)` : (mustResolveDraw ? 'Resolve your drawn card first' : 'Face down');
 
+                    // Priority 1: Selecting targets (Abilities)
                     if (selectingTargets) {
-                         btn.addEventListener('click', () => handleCardClick(player.player_id, index, false));
+                         btn.addEventListener('click', (e) => {
+                             e.stopPropagation(); // Stop bubbling
+                             handleCardClick(player.player_id, index, false);
+                         });
                          btn.style.borderColor = "#00acc1";
                          btn.style.cursor = "pointer";
                          btn.innerText = "🎯";
-                    } else if (!mustResolveDraw) {
+                    }
+                    // Priority 2: Elimination (Normal phase, if no draw pending)
+                    else if (!mustResolveDraw) {
                         btn.addEventListener('click', () => eliminateCard(player.player_id, index));
                     } else {
                         btn.disabled = true;
@@ -708,4 +823,5 @@ window.resolveDraw = resolveDraw;
 window.callCambio = callCambio;
 window.copyRoomId = copyRoomId;
 window.startGame = startGame;
+window.playAgain = playAgain;
 window.skipAbility = skipAbility;
