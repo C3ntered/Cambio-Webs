@@ -16,12 +16,6 @@ const getApiBase = () => {
 
 const API_BASE = getApiBase();
 
-// Durations and Timeouts (in milliseconds)
-const REVEAL_DURATION = 5000;
-const VIEWING_DURATION = 5000;
-const NOTIFY_DURATION_LONG = 10000;
-const COPY_FEEDBACK_DURATION = 2000;
-
 let socket = null;
 let playerContext = {
     username: null,
@@ -34,6 +28,7 @@ let pendingAbility = null;    // Ability available to use
 let selectingTargets = false; // Mode for selecting targets
 let selectedTargets = [];     // Targets selected so far
 let pendingSwapDecision = false; // Mode for deciding whether to swap
+let adminMode = false; // Admin debug mode to see all cards
 
 async function joinGame(username, roomId = null) {
     if (!username) {
@@ -125,12 +120,14 @@ function handleSocketMessage(event) {
         case 'deck_reshuffled':
         case 'cambio_called':
         case 'game_ended':
-            // Show winner
-            const winnerId = message.data.winner_id;
-            const winnerName = message.data.winner_username;
-            alert(`Game Over! Winner: ${winnerName}`);
-            notify(`Game Over! Winner: ${winnerName} (Score: ${latestRoomState.players.find(p=>p.player_id === winnerId)?.score})`, NOTIFY_DURATION_LONG);
-
+            // Show winner only if we have a winner
+            if (message.data.winner_id) {
+                const winnerId = message.data.winner_id;
+                const winnerName = message.data.winner_username;
+                alert(`Game Over! Winner: ${winnerName}`);
+                notify(`Game Over! Winner: ${winnerName} (Score: ${latestRoomState.players.find(p=>p.player_id === winnerId)?.score})`, 10000);
+            }
+            
             pendingDrawnCard = null;
             pendingAbility = null;
             selectingTargets = false;
@@ -196,19 +193,23 @@ function handleSocketMessage(event) {
                     setTimeout(() => {
                         cardButton.innerText = originalText;
                         cardButton.classList.remove('revealed');
-                    }, duration || REVEAL_DURATION);
+                    }, duration || 5000);
                 }
             } else if (ability === 'peek_other') {
                 if (latestRoomState) {
                     const targetPlayer = latestRoomState.players.find(p => p.player_id === target_player_id);
                     const targetUsername = targetPlayer ? targetPlayer.username : 'another player';
                     const text = `You see ${targetUsername}'s card #${card_index + 1}: ${formatCard(card)}`;
-                    notify(text, duration || REVEAL_DURATION);
+                    notify(text, duration || 5000);
                     alert(text); // Also show alert for explicit visibility
                 }
             } else if (ability === 'look_and_swap' && first && second) {
                 // Reveal the cards visually
                 const revealCard = (pid, idx, c) => {
+                    const selector = pid === playerContext.playerId 
+                        ? `#card-container > button:nth-child(${idx + 1})`
+                        : `#opponents-container .opponent-hand:has(.opponent-name:contains('${latestRoomState.players.find(p => p.player_id === pid)?.username}')) .opponent-cards button:nth-child(${idx + 1})`;
+                    
                     // Simple logic for finding the button. For opponents, it's tricky with :contains, let's just use index if we can find the player section.
                     let btn = null;
                     if (pid === playerContext.playerId) {
@@ -233,7 +234,7 @@ function handleSocketMessage(event) {
                         setTimeout(() => {
                             btn.innerText = originalText;
                             btn.classList.remove('revealed');
-                        }, REVEAL_DURATION);
+                        }, 5000);
                     }
                 };
 
@@ -245,7 +246,7 @@ function handleSocketMessage(event) {
                 const p1 = latestRoomState.players.find(p => p.player_id === first.player_id);
                 const p2 = latestRoomState.players.find(p => p.player_id === second.player_id);
                 notify(`You saw: ${formatCard(first.card)} (${p1.username}) and ${formatCard(second.card)} (${p2.username})`);
-
+                
                 renderBoard(latestRoomState, playerContext.playerId);
             } else {
                 notify(`Ability result: ${JSON.stringify(message.data)}`);
@@ -286,6 +287,10 @@ function sendMessage(type, data = {}) {
 
 function drawCard() {
     sendMessage('draw_card');
+}
+
+function drawFromDiscard() {
+    sendMessage('draw_from_discard');
 }
 
 function resolveDraw(action, cardIndex) {
@@ -346,28 +351,28 @@ function startAbilitySelection(ability) {
     const nameDisplay = document.getElementById('ability-name-display');
     const desc = document.getElementById('ability-desc');
     const controls = document.getElementById('ability-controls');
-
+    
     if (panel && nameDisplay && desc) {
         panel.style.display = 'block';
         nameDisplay.innerText = ability;
         if (controls) controls.innerHTML = '';
-
+        
         let instructions = "";
         if (ability === 'peek_self') instructions = "Click one of YOUR cards to peek at it.";
         else if (ability === 'peek_other') instructions = "Click one of an OPPONENT'S cards to peek at it.";
         else if (ability === 'blind_swap') instructions = "Click one of YOUR cards, then one of an OPPONENT'S cards to swap them.";
         else if (ability === 'look_and_swap') instructions = "Click ANY two cards to look at them. (Swap optional)";
-
+        
         desc.innerText = instructions;
     }
 }
 
 function handleCardClick(playerId, cardIndex, isOwnCard) {
     if (!selectingTargets) return;
-
+    
     // Add target
     selectedTargets.push({ player_id: playerId, card_index: cardIndex });
-
+    
     // Check if we have enough targets
     if (pendingAbility === 'peek_self') {
         if (!isOwnCard) {
@@ -403,8 +408,8 @@ function handleCardClick(playerId, cardIndex, isOwnCard) {
                 selectedTargets = [first]; // Keep first
                 return;
             }
-            sendMessage('use_ability', {
-                target_player_id: second.player_id,
+            sendMessage('use_ability', { 
+                target_player_id: second.player_id, 
                 own_card_index: first.card_index,
                 target_card_index: second.card_index
             });
@@ -474,7 +479,7 @@ function renderBoard(room, yourPlayerId) {
     if (startGameBtn) {
         const isWaiting = room.status === 'waiting' || room.status === 'WAITING';
         const isFinished = room.status === 'finished' || room.status === 'FINISHED';
-
+        
         if (isWaiting) {
             if (room.players.length >= room.min_players) {
                 startGameBtn.style.display = 'block';
@@ -551,10 +556,39 @@ function renderBoard(room, yourPlayerId) {
             if (pendingDrawnCard) {
                 drawChoicePanel.style.display = 'block';
                 drawnCardDisplay.textContent = formatCard(pendingDrawnCard);
+                
+                // If drawn from discard pile, you cannot discard it again
+                if (discardDrawnBtn) {
+                     // Check if last draw source was discard
+                     const me = room.players.find(p => p.player_id === yourPlayerId);
+                     if (me && me.last_draw_source === 'discard') {
+                         discardDrawnBtn.style.display = 'none';
+                         // Add note
+                         let note = document.getElementById('swap-only-note');
+                         if (!note) {
+                             note = document.createElement('p');
+                             note.id = 'swap-only-note';
+                             note.style.color = 'red';
+                             note.innerText = 'You must swap when drawing from discard pile.';
+                             drawChoicePanel.appendChild(note);
+                         } else {
+                             note.style.display = 'block';
+                         }
+                     } else {
+                         discardDrawnBtn.style.display = 'inline-block';
+                         const note = document.getElementById('swap-only-note');
+                         if (note) note.style.display = 'none';
+                     }
+                }
+
                 if (drawCardBtn) drawCardBtn.disabled = true;
+                const drawDiscardBtn = document.getElementById('draw-discard-btn');
+                if (drawDiscardBtn) drawDiscardBtn.disabled = true;
             } else {
                 drawChoicePanel.style.display = 'none';
                 if (drawCardBtn) drawCardBtn.disabled = false;
+                const drawDiscardBtn = document.getElementById('draw-discard-btn');
+                if (drawDiscardBtn) drawDiscardBtn.disabled = false;
             }
         }
         
@@ -566,7 +600,7 @@ function renderBoard(room, yourPlayerId) {
                 const nameDisplay = document.getElementById('ability-name-display');
                 const desc = document.getElementById('ability-desc');
                 const controls = document.getElementById('ability-controls');
-
+                
                 if (nameDisplay) nameDisplay.innerText = "Swap Decision";
                 if (desc) desc.innerText = "Do you want to swap the cards you just saw?";
                 if (controls) {
@@ -595,7 +629,7 @@ function renderBoard(room, yourPlayerId) {
             // 4. Cambio hasn't been called yet
             const isMyTurn = room.game_state.current_turn === yourPlayerId;
             const canCall = isMyTurn && !pendingDrawnCard && !pendingAbility && !room.game_state.cambio_called;
-
+            
             callCambioBtn.disabled = !canCall;
             if (room.game_state.cambio_called) {
                 callCambioBtn.title = "Cambio has already been called";
@@ -630,7 +664,7 @@ function renderBoard(room, yourPlayerId) {
                 // Countdown display
                 const countdownEl = document.getElementById('viewing-countdown');
                 if (countdownEl) {
-                    let secs = VIEWING_DURATION / 1000;
+                    let secs = 5;
                     countdownEl.textContent = secs;
                     countdownEl.style.display = 'block';
                     const countInterval = setInterval(() => {
@@ -645,7 +679,7 @@ function renderBoard(room, yourPlayerId) {
                     if (marker.parentNode) marker.parentNode.removeChild(marker);
                     const ce = document.getElementById('viewing-countdown');
                     if (ce) ce.style.display = 'none';
-                }, VIEWING_DURATION);
+                }, 5000);
             }
 
             if (me) {
@@ -668,11 +702,11 @@ function renderBoard(room, yourPlayerId) {
                             btn.style.borderColor = "#00acc1";
                             btn.style.cursor = "pointer";
                             btn.innerText = "🎯";
-                        }
+                        } 
                         // Priority 2: Swapping drawn card (Draw phase)
                         else if (isAwaitingDrawChoice) {
                             btn.addEventListener('click', () => resolveDraw('swap', index));
-                        }
+                        } 
                         // Priority 3: Default play/eliminate (Normal phase)
                         else {
                             btn.addEventListener('click', () => playCard(card));
@@ -702,11 +736,18 @@ function renderBoard(room, yourPlayerId) {
                 section.appendChild(nameEl);
                 const cardsDiv = document.createElement('div');
                 cardsDiv.className = 'opponent-cards';
-                player.hand.forEach((_, index) => {
+                player.hand.forEach((card, index) => {
                     const btn = document.createElement('button');
-                    btn.innerText = '🂠';
+                    if (adminMode) {
+                        btn.innerText = formatCard(card);
+                        btn.style.background = "#e3f2fd";
+                        btn.style.color = "#000";
+                        btn.style.fontSize = "14px";
+                    } else {
+                        btn.innerText = '🂠';
+                    }
                     btn.title = !mustResolveDraw ? `Try to eliminate ${player.username}'s card #${index + 1} (must match discard)` : (mustResolveDraw ? 'Resolve your drawn card first' : 'Face down');
-
+                    
                     // Priority 1: Selecting targets (Abilities)
                     if (selectingTargets) {
                          btn.addEventListener('click', (e) => {
@@ -716,7 +757,7 @@ function renderBoard(room, yourPlayerId) {
                          btn.style.borderColor = "#00acc1";
                          btn.style.cursor = "pointer";
                          btn.innerText = "🎯";
-                    }
+                    } 
                     // Priority 2: Elimination (Normal phase, if no draw pending)
                     else if (!mustResolveDraw) {
                         btn.addEventListener('click', () => eliminateCard(player.player_id, index));
@@ -767,6 +808,16 @@ function updateStatus(status) {
     }
 }
 
+function toggleAdminMode() {
+    const checkbox = document.getElementById('admin-mode-toggle');
+    if (checkbox) {
+        adminMode = checkbox.checked;
+        if (latestRoomState) {
+            renderBoard(latestRoomState, playerContext.playerId);
+        }
+    }
+}
+
 function copyRoomId() {
     const roomId = playerContext.roomId;
     if (!roomId) {
@@ -784,7 +835,7 @@ function copyRoomId() {
             setTimeout(() => {
                 button.innerText = originalText;
                 button.classList.remove('copied');
-            }, COPY_FEEDBACK_DURATION);
+            }, 2000);
         }
         notify(`Room ID "${roomId}" copied to clipboard!`);
     }).catch(err => {
@@ -819,6 +870,7 @@ async function handleJoin() {
 window.joinGame = joinGame;
 window.handleJoin = handleJoin;
 window.drawCard = drawCard;
+window.drawFromDiscard = drawFromDiscard;
 window.playCard = playCard;
 window.eliminateCard = eliminateCard;
 window.resolveDraw = resolveDraw;
@@ -827,3 +879,4 @@ window.copyRoomId = copyRoomId;
 window.startGame = startGame;
 window.playAgain = playAgain;
 window.skipAbility = skipAbility;
+window.toggleAdminMode = toggleAdminMode;

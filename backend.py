@@ -7,7 +7,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict
 from typing import List, Dict, Optional, Set
 from datetime import datetime
 import uuid
@@ -50,7 +50,7 @@ class Card(BaseModel):
 
 class Player(BaseModel):
     player_id: str
-    username: str = Field(..., min_length=1, max_length=32)
+    username: str
     hand: List[Card] = []
     score: int = 0
     is_connected: bool = False
@@ -85,12 +85,12 @@ class Room(BaseModel):
     num_decks: int = 1  # Number of decks to use (auto-calculated if >5 players)
 
 class CreateRoomRequest(BaseModel):
-    username: str = Field(..., min_length=1, max_length=32)
+    username: str
     max_players: int = 4
     num_decks: Optional[int] = None  # If None, auto-calculate based on player count (>5 = 2 decks)
 
 class JoinRoomRequest(BaseModel):
-    username: str = Field(..., min_length=1, max_length=32)
+    username: str
 
 class WebSocketMessage(BaseModel):
     type: str  # join, play_card, draw_card, reveal_card, game_state_request
@@ -370,14 +370,21 @@ class GameRoomManager:
         room = self.rooms.get(room_id)
         if not room:
             return None
-        lowest_score = None
-        winner_id = None
+        
+        # Calculate scores
         for player in room.players:
-            score = sum(get_card_value(card) for card in player.hand)
-            player.score = score
-            if lowest_score is None or score < lowest_score:
-                lowest_score = score
-                winner_id = player.player_id
+            player.score = sum(get_card_value(card) for card in player.hand)
+        
+        # Determine winner: Lowest score, tie-breaker: fewest cards
+        # Sort players by score (asc), then by hand size (asc)
+        sorted_players = sorted(
+            room.players, 
+            key=lambda p: (p.score, len(p.hand))
+        )
+        
+        winner = sorted_players[0] if sorted_players else None
+        winner_id = winner.player_id if winner else None
+        
         if winner_id:
             self.end_game(room_id, winner_id)
         return winner_id
@@ -439,7 +446,7 @@ class GameRoomManager:
             if not validate_index(acting_player.hand, own_index) or not validate_index(target.hand, target_index):
                 return False
             acting_player.hand[own_index], target.hand[target_index] = target.hand[target_index], acting_player.hand[own_index]
-
+            
             await self.broadcast_to_room(room_id, {
                 "type": "cards_swapped",
                 "data": {
@@ -453,7 +460,7 @@ class GameRoomManager:
             # Phase 1: Request to Look
             first = payload.get("first_target")
             second = payload.get("second_target")
-
+            
             def resolve_target(target_payload):
                 pid = target_payload.get("player_id")
                 idx = target_payload.get("card_index")
@@ -489,7 +496,7 @@ class GameRoomManager:
                     "message": "Review the cards. Do you want to swap them?"
                 }
             })
-
+            
             # Return True to indicate the *Look* action was successful, but we don't end turn yet
             # because pending_ability is now set to 'swap_decision'
             return True
@@ -563,7 +570,7 @@ async def start_room_game(room_id: str):
     
     room_manager.start_game(room_id)
     room = room_manager.get_room(room_id)
-
+    
     # Broadcast game started event
     await room_manager.broadcast_to_room(room_id, {
         "type": "game_started",
@@ -571,7 +578,7 @@ async def start_room_game(room_id: str):
             "room": room.model_dump(mode='json')
         }
     })
-
+    
     return {"room": room, "message": "Game started successfully"}
 
 # ============================================================================
@@ -824,7 +831,7 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
                         "message": "You must use or skip your pending ability first"
                     })
                     continue
-
+                
                 # If deck is empty, reshuffle discard pile (keeping last card)
                 if not room.game_state.deck:
                     if len(room.game_state.discard_pile) <= 1:
@@ -880,6 +887,48 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
                     }
                 }, exclude_player=player_id)
 
+            elif msg_type == "draw_from_discard":
+                # Draw a card from discard pile (must swap)
+                # Check if game is still active
+                if room.status != GameStatus.PLAYING:
+                    await websocket.send_json({"type": "error", "message": "Game is not active"})
+                    continue
+                
+                if room.game_state.current_turn != player_id:
+                    await websocket.send_json({"type": "error", "message": "Not your turn"})
+                    continue
+
+                if player.pending_drawn_card:
+                    await websocket.send_json({"type": "error", "message": "Resolve your drawn card first"})
+                    continue
+                
+                if not room.game_state.discard_pile:
+                    await websocket.send_json({"type": "error", "message": "Discard pile is empty"})
+                    continue
+
+                drawn_card = room.game_state.discard_pile.pop()
+                player.pending_drawn_card = drawn_card
+                player.last_draw_source = "discard"
+                player.last_drawn_card = drawn_card
+                
+                await websocket.send_json({
+                    "type": "card_drawn",
+                    "data": {
+                        "card": drawn_card.model_dump(mode='json'),
+                        "room": room.model_dump(mode='json'),
+                        "source": "discard"
+                    }
+                })
+                
+                await room_manager.broadcast_to_room(room_id, {
+                    "type": "player_drew_card",
+                    "data": {
+                        "player_id": player_id,
+                        "room": get_room_dict_for_broadcast(room, hide_pending_for_player=player_id),
+                        "source": "discard"
+                    }
+                }, exclude_player=player_id)
+
             elif msg_type == "resolve_draw":
                 # Handle the player's choice after drawing: 'swap' or 'discard'
                 action = message.get("data", {}).get("action")
@@ -923,20 +972,25 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
                         })
 
                 elif action == "discard":
+                    # You can only discard if you drew from the deck
+                    if player.last_draw_source == "discard":
+                        await websocket.send_json({"type": "error", "message": "You must swap when drawing from discard pile"})
+                        continue
+
                     # Discard the drawn card. No matching required as we are just discarding the card we drew.
                     # "You can then choose to discard the card you drew"
                     card = player.pending_drawn_card
-
+                    
                     room.game_state.discard_pile.append(card)
                     player.pending_drawn_card = None
-
+                    
                     # Check for ability
                     ability_name = get_card_ability(card)
                     if ability_name:
                          # Check if player is "immune" because they called Cambio?
                          # "The person who called Canbio... is immune to any abilities."
                          # But this is the active player using their own ability.
-
+                         
                          player.pending_ability = ability_name
                          # Send ability opportunity
                          await websocket.send_json({
@@ -974,10 +1028,10 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
                 if not player.pending_ability:
                     await websocket.send_json({"type": "error", "message": "No pending ability"})
                     continue
-
+                
                 payload = message.get("data", {})
                 ability_name = player.pending_ability
-
+                
                 resolved = await room_manager.resolve_card_ability(room, player, ability_name, payload)
                 if resolved:
                     # If the ability moved us to a decision state (like 'swap_decision'), do NOT end turn yet
@@ -1005,15 +1059,15 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
                 if player.pending_ability != "swap_decision" or not player.pending_swap_targets:
                     await websocket.send_json({"type": "error", "message": "No pending swap decision"})
                     continue
-
+                
                 do_swap = message.get("data", {}).get("swap", False)
                 targets = player.pending_swap_targets
-
+                
                 if do_swap:
                     # Execute swap
                     p1 = next((p for p in room.players if p.player_id == targets["first_player_id"]), None)
                     p2 = next((p for p in room.players if p.player_id == targets["second_player_id"]), None)
-
+                    
                     if p1 and p2:
                         idx1 = targets["first_card_index"]
                         idx2 = targets["second_card_index"]
@@ -1028,11 +1082,11 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
                                     "room": room.model_dump(mode='json')
                                 }
                             })
-
+                
                 # Clear state and end turn
                 player.pending_ability = None
                 player.pending_swap_targets = None
-
+                
                 cambio_winner = room_manager.next_turn(room_id)
                 room = room_manager.get_room(room_id)
                 await room_manager.broadcast_to_room(room_id, {
@@ -1044,12 +1098,12 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
                         "type": "game_ended",
                         "data": {"winner_id": cambio_winner, "winner_username": next((p.username for p in room.players if p.player_id == cambio_winner), "Unknown"), "room": room.model_dump(mode='json')}
                     })
-
+            
             elif msg_type == "skip_ability":
                 if not player.pending_ability:
                     await websocket.send_json({"type": "error", "message": "No pending ability"})
                     continue
-
+                
                 player.pending_ability = None
                 # End turn
                 cambio_winner = room_manager.next_turn(room_id)
@@ -1332,8 +1386,8 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
                 # Reset game state
                 room.status = GameStatus.WAITING
                 room.game_state = GameState()
-
-                # Reset player hands and states (but keep scores? User said "Play Again" usually implies fresh start or round.
+                
+                # Reset player hands and states (but keep scores? User said "Play Again" usually implies fresh start or round. 
                 # Let's keep scores if they want to track rounds, but clear hands.)
                 # "it bring us back to the start lobby and shows the players" -> usually implies full reset or new round.
                 # Let's reset everything for a fresh game as per "bring us back to the start lobby".
@@ -1346,10 +1400,10 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
                     p.pending_swap_targets = None
                     # Optional: Reset score if it's a new game? Or keep for session?
                     # "bring us back to the start lobby" sounds like a full reset.
-                    # But often friends play multiple rounds. Let's keep scores for now?
+                    # But often friends play multiple rounds. Let's keep scores for now? 
                     # User: "shows the players".
                     # Let's NOT reset scores so they can see who is winning overall.
-
+                
                 # Broadcast reset
                 await room_manager.broadcast_to_room(room_id, {
                     "type": "game_reset",
