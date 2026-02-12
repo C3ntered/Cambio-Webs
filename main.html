@@ -83,9 +83,8 @@
         }
         .opponent-cards {
             display: grid;
-            grid-template-columns: repeat(2, 1fr);
+            grid-template-columns: repeat(3, 1fr);
             gap: 8px;
-            max-width: 320px;
         }
         .opponent-cards button {
             padding: 12px 10px;
@@ -140,16 +139,10 @@
         }
         #card-container {
             display: grid;
+            grid-auto-flow: column;
+            grid-template-rows: repeat(2, 1fr);
             gap: 12px;
             margin-top: 10px;
-        }
-        #card-container.cols-2 {
-            grid-template-columns: repeat(2, 1fr);
-            max-width: 280px;
-        }
-        #card-container.cols-3 {
-            grid-template-columns: repeat(3, 1fr);
-            max-width: 420px;
         }
         #card-container button {
             padding: 20px 16px;

@@ -28,6 +28,7 @@ let pendingAbility = null;    // Ability available to use
 let selectingTargets = false; // Mode for selecting targets
 let selectedTargets = [];     // Targets selected so far
 let pendingSwapDecision = false; // Mode for deciding whether to swap
+let eliminationTarget = null; // Target for elimination (waiting for replacement card selection)
 let adminMode = false; // Admin debug mode to see all cards
 
 async function joinGame(username, roomId = null) {
@@ -133,6 +134,7 @@ function handleSocketMessage(event) {
             selectingTargets = false;
             selectedTargets = [];
             pendingSwapDecision = false;
+            eliminationTarget = null;
             latestRoomState = message.data.room;
             renderBoard(message.data.room, message.data.your_player_id || playerContext.playerId);
             break;
@@ -149,6 +151,7 @@ function handleSocketMessage(event) {
             selectingTargets = false;
             selectedTargets = [];
             pendingSwapDecision = false;
+            eliminationTarget = null;
             latestRoomState = message.data.room;
             renderBoard(message.data.room, message.data.your_player_id || playerContext.playerId);
             break;
@@ -309,11 +312,20 @@ function playCard(card, abilityPayload = null) {
     sendMessage('play_card', payload);
 }
 
-function eliminateCard(targetPlayerId, cardIndex) {
+function startElimination(targetPlayerId, cardIndex) {
+    eliminationTarget = { pid: targetPlayerId, idx: cardIndex };
+    notify("Target selected! Now click one of YOUR cards to give to them.");
+    renderBoard(latestRoomState, playerContext.playerId);
+}
+
+function completeElimination(replacementCardIndex) {
+    if (!eliminationTarget) return;
     sendMessage('eliminate_card', {
-        target_player_id: targetPlayerId,
-        card_index: cardIndex
+        target_player_id: eliminationTarget.pid,
+        card_index: eliminationTarget.idx,
+        replacement_card_index: replacementCardIndex
     });
+    eliminationTarget = null;
 }
 
 function callCambio() {
@@ -429,6 +441,24 @@ function handleCardClick(playerId, cardIndex, isOwnCard) {
             pendingAbility = null;
         }
     }
+}
+
+function getVisualOrder(totalCards) {
+    // Generate rendering order for grid-auto-flow: column with 2 fixed rows.
+    // We want the first 4 cards (indices 0-3) to visually appear as a 2x2 grid (0,1 Top; 2,3 Bottom).
+    // With column flow, indices fill: (1,1), (2,1), (1,2), (2,2)...
+    // So we need to feed: 0, 2, 1, 3.
+    // Subsequent cards fill columns sequentially: 4 (Top), 5 (Bottom), etc.
+    const indices = [];
+    if (totalCards > 0) indices.push(0);
+    if (totalCards > 2) indices.push(2);
+    if (totalCards > 1) indices.push(1);
+    if (totalCards > 3) indices.push(3);
+    
+    for (let i = 4; i < totalCards; i++) {
+        indices.push(i);
+    }
+    return indices.filter(i => i < totalCards);
 }
 
 function renderBoard(room, yourPlayerId) {
@@ -684,8 +714,12 @@ function renderBoard(room, yourPlayerId) {
 
             if (me) {
                 const isAwaitingDrawChoice = !!pendingDrawnCard;
-                cardContainer.classList.add(me.hand.length >= 5 ? 'cols-3' : 'cols-2');
-                me.hand.forEach((card, index) => {
+                
+                // Use visual order for rendering
+                const visualOrder = getVisualOrder(me.hand.length);
+                
+                visualOrder.forEach(index => {
+                    const card = me.hand[index];
                     const btn = document.createElement('button');
                     // 2x2 matrix: indices 0,1 = top row; 2,3 = bottom row. Bottom two shown for 5 seconds.
                     const isBottomCard = index === 2 || index === 3;
@@ -706,8 +740,16 @@ function renderBoard(room, yourPlayerId) {
                         // Priority 2: Swapping drawn card (Draw phase)
                         else if (isAwaitingDrawChoice) {
                             btn.addEventListener('click', () => resolveDraw('swap', index));
-                        } 
-                        // Priority 3: Default play/eliminate (Normal phase)
+                        }
+                        // Priority 3: Selecting replacement card for elimination
+                        else if (eliminationTarget) {
+                            btn.addEventListener('click', () => completeElimination(index));
+                            btn.style.borderColor = "#ff9800"; // Orange highlight
+                            btn.style.cursor = "pointer";
+                            btn.innerText = "Give";
+                            btn.title = "Give this card to replace the eliminated one";
+                        }
+                        // Priority 4: Default play/eliminate (Normal phase)
                         else {
                             btn.addEventListener('click', () => playCard(card));
                         }
@@ -736,7 +778,12 @@ function renderBoard(room, yourPlayerId) {
                 section.appendChild(nameEl);
                 const cardsDiv = document.createElement('div');
                 cardsDiv.className = 'opponent-cards';
-                player.hand.forEach((card, index) => {
+                
+                // Use visual order
+                const visualOrder = getVisualOrder(player.hand.length);
+                
+                visualOrder.forEach(index => {
+                    const card = player.hand[index];
                     const btn = document.createElement('button');
                     if (adminMode) {
                         btn.innerText = formatCard(card);
@@ -760,7 +807,12 @@ function renderBoard(room, yourPlayerId) {
                     } 
                     // Priority 2: Elimination (Normal phase, if no draw pending)
                     else if (!mustResolveDraw) {
-                        btn.addEventListener('click', () => eliminateCard(player.player_id, index));
+                        if (eliminationTarget && eliminationTarget.pid === player.player_id && eliminationTarget.idx === index) {
+                            // Already selected as target
+                            btn.style.borderColor = "#ff9800";
+                            btn.style.borderWidth = "4px";
+                        }
+                        btn.addEventListener('click', () => startElimination(player.player_id, index));
                     } else {
                         btn.disabled = true;
                     }
@@ -872,7 +924,7 @@ window.handleJoin = handleJoin;
 window.drawCard = drawCard;
 window.drawFromDiscard = drawFromDiscard;
 window.playCard = playCard;
-window.eliminateCard = eliminateCard;
+// window.eliminateCard = eliminateCard; // Removed direct access
 window.resolveDraw = resolveDraw;
 window.callCambio = callCambio;
 window.copyRoomId = copyRoomId;

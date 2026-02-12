@@ -1215,6 +1215,7 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
                 elimination_data = message.get("data", {})
                 target_id = elimination_data.get("target_player_id")
                 target_index = elimination_data.get("card_index")
+                replacement_index = elimination_data.get("replacement_card_index")
 
                 if target_id is None or target_index is None:
                     await websocket.send_json({
@@ -1239,6 +1240,21 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
                         "message": "Target player not found"
                     })
                     continue
+                
+                # Check replacement card if targeting opponent
+                if target_id != player_id:
+                    if replacement_index is None:
+                        await websocket.send_json({
+                            "type": "error",
+                            "message": "You must select a card to give to the opponent."
+                        })
+                        continue
+                    if replacement_index < 0 or replacement_index >= len(player.hand):
+                         await websocket.send_json({
+                            "type": "error",
+                            "message": "Invalid replacement card index"
+                        })
+                         continue
 
                 # Can eliminate anyone's card including your own (e.g. when it's not your turn)
 
@@ -1303,6 +1319,15 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
                     continue
 
                 removed_card = target_player.hand.pop(target_index)
+                room.game_state.discard_pile.append(removed_card)
+                
+                msg_extra = ""
+                if target_id != player_id:
+                     # Move replacement card
+                     replacement_card = player.hand.pop(replacement_index)
+                     target_player.hand.insert(target_index, replacement_card)
+                     msg_extra = " and gave them a replacement card"
+                
                 room = room_manager.get_room(room_id)
 
                 # Eliminations don't end your turn - you can do as many as you want
@@ -1312,6 +1337,7 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
                         "initiator": player_id,
                         "target_player_id": target_id,
                         "removed_card": removed_card.model_dump(mode='json'),
+                        "message": f"{player.username} eliminated {target_player.username}'s card{msg_extra}.",
                         "room": room.model_dump(mode='json')
                     }
                 })
