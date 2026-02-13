@@ -212,6 +212,43 @@ function handleSocketMessage(event) {
             notify(message.data.message);
             latestRoomState = message.data.room;
             renderBoard(message.data.room, playerContext.playerId);
+
+            // Highlight swapped cards
+            const { player1_id: player1Id, card1_index: card1Index, player2_id: player2Id, card2_index: card2Index } = message.data;
+
+            const highlight = (pid, idx) => {
+                 let btn = null;
+                 if (pid === playerContext.playerId) {
+                     const container = document.getElementById('card-container');
+                     if (container) {
+                         const buttons = Array.from(container.children);
+                         btn = buttons.find(b => parseInt(b.getAttribute('data-index')) === idx);
+                     }
+                 } else {
+                    const oppContainer = document.getElementById('opponents-container');
+                    if (oppContainer) {
+                        const allPlayers = latestRoomState.players;
+                        const opponents = allPlayers.filter(p => p.player_id !== playerContext.playerId);
+                        const oppIndex = opponents.findIndex(p => p.player_id === pid);
+
+                        if (oppIndex !== -1 && oppContainer.children[oppIndex]) {
+                            const cardsDiv = oppContainer.children[oppIndex].querySelector('.opponent-cards');
+                            if (cardsDiv) {
+                                 const buttons = Array.from(cardsDiv.children);
+                                 btn = buttons.find(b => parseInt(b.getAttribute('data-index')) === idx);
+                            }
+                        }
+                    }
+                 }
+
+                 if (btn) {
+                     btn.classList.add('swapped-highlight');
+                     setTimeout(() => btn.classList.remove('swapped-highlight'), 3000);
+                 }
+            };
+
+            if (player1_id !== undefined && card1_index !== undefined) highlight(player1_id, card1_index);
+            if (player2_id !== undefined && card2_index !== undefined) highlight(player2_id, card2_index);
             break;
         case 'card_drawn':
             pendingDrawnCard = message.data.card;
