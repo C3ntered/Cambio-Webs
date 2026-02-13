@@ -19,7 +19,7 @@
             box-shadow: 0 2px 4px rgba(0,0,0,0.1);
             margin-bottom: 20px;
         }
-        #lobby input {
+        #lobby input, #lobby select {
             display: block;
             width: 100%;
             padding: 10px;
@@ -148,18 +148,76 @@
             margin-top: 10px;
         }
         #card-container button {
-            padding: 20px 16px;
+            padding: 5px;
             font-size: 14px;
             border: 2px solid #333;
             border-radius: 8px;
             background-color: white;
             cursor: pointer;
-            min-height: 90px;
+            min-height: 120px;
+            min-width: 80px;
             width: 100%;
             box-sizing: border-box;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+            align-items: center;
+            font-weight: bold;
+            box-shadow: 2px 2px 5px rgba(0,0,0,0.2);
+            position: relative;
         }
         #card-container button:hover {
-            background-color: #e0e0e0;
+            background-color: #f5f5f5;
+            transform: translateY(-2px);
+            transition: transform 0.2s;
+        }
+        .card-corner-top {
+            align-self: flex-start;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            line-height: 1;
+            font-size: 20px; /* Increased from 14px */
+        }
+        .card-center {
+            font-size: 48px; /* Increased from 32px */
+            line-height: 1;
+        }
+        .card-corner-bottom {
+            align-self: flex-end;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            line-height: 1;
+            transform: rotate(180deg);
+            font-size: 20px; /* Increased from 14px */
+        }
+        .card-red {
+            color: #d32f2f;
+            border-color: #d32f2f !important;
+        }
+        .card-black {
+            color: #212121;
+            border-color: #212121 !important;
+        }
+        .card-special-king {
+            color: #b71c1c; /* Darker Red for Red King */
+            border-color: #b71c1c !important;
+            background-color: #ffebee !important;
+        }
+        .card-back {
+            background: linear-gradient(135deg, #1565C0 25%, #1976D2 25%, #1976D2 50%, #1565C0 50%, #1565C0 75%, #1976D2 75%, #1976D2 100%);
+            background-size: 20px 20px;
+            color: transparent;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+        .card-back::after {
+            content: "🂠";
+            color: white;
+            font-size: 40px;
+            text-shadow: 1px 1px 2px rgba(0,0,0,0.5);
         }
         .swapped-highlight {
             animation: pulse-orange 1s infinite;
@@ -260,9 +318,18 @@
     <h1>Cambio Card Game</h1>
     
     <div id="lobby">
+        <h2 style="margin-top:0;">Join / Create Game</h2>
         <input type="text" id="username" placeholder="Enter username">
         <input type="text" id="room-id" placeholder="Room ID (leave blank to create)">
-        <button onclick="handleJoin()">Join Game</button>
+
+        <label for="hand-size-select" style="display:block; margin-top:10px; font-size:14px; color:#666;">Starting Hand Size (for new rooms):</label>
+        <select id="hand-size-select">
+            <option value="4" selected>4 Cards</option>
+            <option value="6">6 Cards</option>
+            <option value="8">8 Cards</option>
+        </select>
+
+        <button onclick="handleJoin()" style="margin-top:15px;">Join Game</button>
         <p id="status"></p>
     </div>
 

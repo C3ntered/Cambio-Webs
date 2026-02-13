@@ -37,7 +37,18 @@ async function joinGame(username, roomId = null) {
     }
 
     const endpoint = roomId ? `/api/rooms/${roomId}/join` : '/api/rooms';
-    const payload = roomId ? { username } : { username, max_players: 4 };
+    let payload;
+
+    if (roomId) {
+        payload = { username };
+    } else {
+        const handSize = document.getElementById('hand-size-select')?.value || 4;
+        payload = {
+            username,
+            max_players: 4,
+            initial_hand_size: parseInt(handSize)
+        };
+    }
 
     const response = await fetch(`${API_BASE}${endpoint}`, {
         method: 'POST',
@@ -209,12 +220,13 @@ function handleSocketMessage(event) {
             notify(`Penalty: You drew a face-down penalty card.`);
             break;
         case 'cards_swapped':
+            pendingDrawnCard = null; // Ensure draw state is cleared
             notify(message.data.message);
             latestRoomState = message.data.room;
             renderBoard(message.data.room, playerContext.playerId);
 
             // Highlight swapped cards
-            const { player1_id: player1Id, card1_index: card1Index, player2_id: player2Id, card2_index: card2Index } = message.data;
+            const { player1_id: player1_id_data, card1_index: card1_index_data, player2_id: player2_id_data, card2_index: card2_index_data } = message.data;
 
             const highlight = (pid, idx) => {
                  let btn = null;
@@ -360,6 +372,11 @@ function handleSocketMessage(event) {
             }
             break;
         case 'error':
+            // Auto-recover from state mismatch if backend says "No pending drawn card"
+            if (message.message === "No pending drawn card") {
+                pendingDrawnCard = null;
+                renderBoard(latestRoomState, playerContext.playerId); // Refresh UI to hide panel
+            }
             alert(message.message);
             break;
         default:
@@ -533,21 +550,27 @@ function handleCardClick(playerId, cardIndex, isOwnCard) {
 }
 
 function getVisualOrder(totalCards) {
-    // Generate rendering order for grid-auto-flow: column with 2 fixed rows.
-    // We want the first 4 cards (indices 0-3) to visually appear as a 2x2 grid (0,1 Top; 2,3 Bottom).
-    // With column flow, indices fill: (1,1), (2,1), (1,2), (2,2)...
-    // So we need to feed: 0, 2, 1, 3.
-    // Subsequent cards fill columns sequentially: 4 (Top), 5 (Bottom), etc.
-    const indices = [];
-    if (totalCards > 0) indices.push(0);
-    if (totalCards > 2) indices.push(2);
-    if (totalCards > 1) indices.push(1);
-    if (totalCards > 3) indices.push(3);
+    // General N-card layout for 2 rows.
+    // Top Row: Indices 0 to (N/2 - 1)
+    // Bottom Row: Indices N/2 to N-1
+    // CSS Grid (grid-auto-flow: column; rows: 2) fills: Col1(Row1, Row2), Col2(Row1, Row2)...
+    // So DOM Order must be: Top[0], Bottom[0], Top[1], Bottom[1]...
 
-    for (let i = 4; i < totalCards; i++) {
-        indices.push(i);
+    const indices = [];
+    const half = Math.ceil(totalCards / 2);
+
+    for (let i = 0; i < half; i++) {
+        // Top card in column i
+        if (i < totalCards) indices.push(i);
+        // Bottom card in column i (index i + half)
+        if (i + half < totalCards) indices.push(i + half);
     }
-    return indices.filter(i => i < totalCards);
+
+    // Sort logic check:
+    // 4 cards (half=2): i=0 -> push(0), push(2). i=1 -> push(1), push(3). Result: [0, 2, 1, 3]. Correct.
+    // 6 cards (half=3): i=0 -> push(0), push(3). i=1 -> push(1), push(4). i=2 -> push(2), push(5). Result: [0, 3, 1, 4, 2, 5]. Correct.
+
+    return indices;
 }
 
 function renderBoard(room, yourPlayerId) {
@@ -763,8 +786,41 @@ function renderBoard(room, yourPlayerId) {
 
         const topCardContainer = document.getElementById('top-card');
         if (topCardContainer) {
+            topCardContainer.innerHTML = '';
             const topCard = room.game_state.discard_pile.slice(-1)[0];
-            topCardContainer.innerText = topCard ? formatCard(topCard) : 'N/A';
+            if (topCard) {
+                // Reuse button style for consistency
+                const cardDiv = document.createElement('div');
+                cardDiv.className = 'card-display'; // Not defined in CSS, but we can inline or rely on existing
+                // Mimic card button style
+                cardDiv.style.border = "2px solid #333";
+                cardDiv.style.borderRadius = "8px";
+                cardDiv.style.backgroundColor = "white";
+                cardDiv.style.width = "80px";
+                cardDiv.style.height = "120px";
+                cardDiv.style.display = "flex";
+                cardDiv.style.flexDirection = "column";
+                cardDiv.style.justifyContent = "space-between";
+                cardDiv.style.alignItems = "center";
+                cardDiv.style.padding = "5px";
+                cardDiv.style.fontWeight = "bold";
+                cardDiv.style.margin = "0 auto";
+                cardDiv.style.position = "relative";
+                cardDiv.style.boxShadow = "2px 2px 5px rgba(0,0,0,0.2)";
+
+                renderCardContent(cardDiv, topCard);
+                topCardContainer.appendChild(cardDiv);
+
+                // Remove default padding/border of container if card is present
+                topCardContainer.style.padding = "0";
+                topCardContainer.style.border = "none";
+                topCardContainer.style.background = "transparent";
+            } else {
+                topCardContainer.innerText = 'Empty Pile';
+                topCardContainer.style.padding = "20px";
+                topCardContainer.style.border = "2px solid #333";
+                topCardContainer.style.backgroundColor = "white";
+            }
         }
 
         const cardContainer = document.getElementById('card-container');
@@ -820,14 +876,23 @@ function renderBoard(room, yourPlayerId) {
                         btn.style.background = "transparent";
                         btn.style.cursor = "default";
                     } else {
-                        // 2x2 matrix: indices 0,1 = top row; 2,3 = bottom row. Bottom two shown for 5 seconds.
-                        const isBottomCard = index === 2 || index === 3;
+                        // Generalize: Bottom row is indices [N/2, N-1]
+                        const half = Math.ceil(me.hand.length / 2);
+                        const isBottomCard = index >= half;
                         const isVisible = (isViewingPhase && isBottomCard) || adminMode;
-                        btn.innerText = isVisible ? formatCard(card) : "🂠";
-                        btn.title = isViewingPhase ? (isBottomCard ? 'Memorize this card!' : 'Face down') : (isAwaitingDrawChoice ? `Click to swap with drawn card` : `Card #${index + 1}`);
-                        if (adminMode) {
-                            btn.style.background = "#e3f2fd";
-                            btn.style.color = "#000";
+
+                        // Clear old classes
+                        btn.classList.remove('card-back', 'card-red', 'card-black', 'card-special-king');
+
+                        if (isVisible) {
+                            renderCardContent(btn, card);
+                            if (adminMode) {
+                                btn.style.backgroundColor = "#e3f2fd";
+                            }
+                        } else {
+                            btn.innerHTML = ''; // Clear structure
+                            btn.classList.add('card-back');
+                            btn.title = isViewingPhase ? (isBottomCard ? 'Memorize this card!' : 'Face down') : (isAwaitingDrawChoice ? `Click to swap with drawn card` : `Card #${index + 1}`);
                         }
                     }
 
@@ -949,6 +1014,60 @@ function renderBoard(room, yourPlayerId) {
 
 function formatCard(card) {
     return `${card.rank} of ${card.suit}`;
+}
+
+function getCardColor(card) {
+    if (['Hearts', 'Diamonds'].includes(card.suit)) return 'red';
+    if (['Clubs', 'Spades'].includes(card.suit)) return 'black';
+    return 'black';
+}
+
+function getSuitSymbol(suit) {
+    switch (suit) {
+        case 'Hearts': return '♥';
+        case 'Diamonds': return '♦';
+        case 'Clubs': return '♣';
+        case 'Spades': return '♠';
+        case 'Joker': return '★';
+        default: return '?';
+    }
+}
+
+function renderCardContent(element, card) {
+    element.innerHTML = '';
+
+    // Add color classes
+    const color = getCardColor(card);
+    element.classList.add(color === 'red' ? 'card-red' : 'card-black');
+
+    // Check for Red King special highlight
+    if (card.rank === 'King' && color === 'red') {
+        element.classList.add('card-special-king');
+    }
+
+    const symbol = getSuitSymbol(card.suit);
+    // Short rank: 10 stays 10. Others take first char (A, K, Q, J). Joker -> JK.
+    let rankShort = card.rank;
+    if (card.rank === 'Joker') rankShort = 'JK';
+    else if (card.rank !== '10') rankShort = card.rank[0];
+
+    // Top Corner
+    const topDiv = document.createElement('div');
+    topDiv.className = 'card-corner-top';
+    topDiv.innerHTML = `<span>${rankShort}</span><span>${symbol}</span>`;
+    element.appendChild(topDiv);
+
+    // Center
+    const centerDiv = document.createElement('div');
+    centerDiv.className = 'card-center';
+    centerDiv.innerText = symbol;
+    element.appendChild(centerDiv);
+
+    // Bottom Corner
+    const bottomDiv = document.createElement('div');
+    bottomDiv.className = 'card-corner-bottom';
+    bottomDiv.innerHTML = `<span>${rankShort}</span><span>${symbol}</span>`;
+    element.appendChild(bottomDiv);
 }
 
 function notify(text, duration = null) {
