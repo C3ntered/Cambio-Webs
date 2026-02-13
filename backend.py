@@ -451,7 +451,7 @@ class GameRoomManager:
             await self.broadcast_to_room(room_id, {
                 "type": "cards_swapped",
                 "data": {
-                    "message": f"{acting_player.username} blind swapped a card with {target.username}.",
+                    "message": f"{acting_player.username} blind swapped their card #{own_index + 1} with {target.username}'s card #{target_index + 1}.",
                     "player1_id": acting_player.player_id,
                     "card1_index": own_index,
                     "player2_id": target.player_id,
@@ -977,8 +977,13 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
                     cambio_winner = room_manager.next_turn(room_id)
                     room = room_manager.get_room(room_id)
                     await room_manager.broadcast_to_room(room_id, {
-                        "type": "turn_ended",
-                        "data": {"room": room.model_dump(mode='json')}
+                        "type": "cards_swapped",
+                        "data": {
+                            "message": f"{player.username} swapped their card #{hand_index + 1} with the drawn card.",
+                            "player1_id": player.player_id,
+                            "card1_index": hand_index,
+                            "room": room.model_dump(mode='json')
+                        }
                     })
                     winner_id = room_manager.check_win_condition(room_id)
                     if winner_id:
@@ -1106,7 +1111,7 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
                             await room_manager.broadcast_to_room(room_id, {
                                 "type": "cards_swapped",
                                 "data": {
-                                    "message": f"{player.username} swapped two cards.",
+                                    "message": f"{player.username} swapped {p1.username}'s card #{idx1 + 1} with {p2.username}'s card #{idx2 + 1}.",
                                     "player1_id": p1.player_id,
                                     "card1_index": idx1,
                                     "player2_id": p2.player_id,

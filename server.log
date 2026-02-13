@@ -80,3 +80,11 @@ INFO:     ('127.0.0.1', 46720) - "WebSocket /ws/0ba484cd" [accepted]
 INFO:     connection open
 INFO:     connection closed
 INFO:     connection closed
+INFO:     127.0.0.1:57050 - "GET / HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57050 - "GET /bridge.js HTTP/1.1" 200 OK
+INFO:     127.0.0.1:40000 - "GET /bridge.js HTTP/1.1" 304 Not Modified
+INFO:     127.0.0.1:38278 - "GET /bridge.js HTTP/1.1" 304 Not Modified
+INFO:     127.0.0.1:33290 - "GET / HTTP/1.1" 200 OK
+INFO:     127.0.0.1:33290 - "GET /bridge.js HTTP/1.1" 200 OK
+INFO:     127.0.0.1:37276 - "GET /bridge.js HTTP/1.1" 304 Not Modified
+INFO:     127.0.0.1:34192 - "GET /bridge.js HTTP/1.1" 304 Not Modified
