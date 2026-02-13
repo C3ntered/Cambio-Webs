@@ -681,6 +681,8 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
                 # Play a card from hand (Elimination/Sacrifice)
                 # This corresponds to "matching one of your cards with the one on the top of the discard pile"
                 card_data = message.get("data", {}).get("card")
+                card_index = message.get("data", {}).get("card_index")
+
                 if not card_data:
                     await websocket.send_json({
                         "type": "error",
@@ -716,12 +718,25 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
                 card_found = False
                 played_card = None
                 hand_index = None
-                for i, hand_card in enumerate(player.hand):
-                    if hand_card and hand_card.suit == card.suit and hand_card.rank == card.rank:
-                        played_card = hand_card
-                        hand_index = i
-                        card_found = True
-                        break
+
+                if card_index is not None:
+                    # Use specific index provided by client (fixes duplicate card issues)
+                    if 0 <= card_index < len(player.hand) and player.hand[card_index]:
+                        hand_card = player.hand[card_index]
+                        # Verify it matches the card data sent (optional but good for consistency)
+                        if hand_card.suit == card.suit and hand_card.rank == card.rank:
+                            played_card = hand_card
+                            hand_index = card_index
+                            card_found = True
+
+                if not card_found:
+                    # Fallback to search by value (if index not provided or mismatch)
+                    for i, hand_card in enumerate(player.hand):
+                        if hand_card and hand_card.suit == card.suit and hand_card.rank == card.rank:
+                            played_card = hand_card
+                            hand_index = i
+                            card_found = True
+                            break
                 
                 if not card_found:
                     await websocket.send_json({

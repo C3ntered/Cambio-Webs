@@ -353,8 +353,11 @@ function resolveDraw(action, cardIndex) {
     sendMessage('resolve_draw', payload);
 }
 
-function playCard(card, abilityPayload = null) {
+function playCard(card, cardIndex, abilityPayload = null) {
     const payload = { card };
+    if (cardIndex !== undefined && cardIndex !== null) {
+        payload.card_index = cardIndex;
+    }
     if (abilityPayload) {
         payload.ability = abilityPayload;
     }
@@ -816,7 +819,7 @@ function renderBoard(room, yourPlayerId) {
                         }
                         // Priority 4: Default play/eliminate (Normal phase)
                         else {
-                            btn.addEventListener('click', () => playCard(card));
+                            btn.addEventListener('click', () => playCard(card, index));
                         }
                     } else {
                         btn.style.cursor = 'default';
