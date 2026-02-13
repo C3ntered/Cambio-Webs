@@ -155,7 +155,7 @@ function handleSocketMessage(event) {
             renderBoard(message.data.room, playerContext.playerId);
 
             // Highlight swapped cards
-            const {player1_id: player1_id_data, card1_index: card1_index_data, player2_id: player2_id_data, card2_index: card2_index_data } = message.data;
+            const { player1_id, card1_index, player2_id, card2_index } = message.data;
             if (player1_id !== undefined && card1_index !== undefined &&
                 player2_id !== undefined && card2_index !== undefined) {
 
@@ -220,6 +220,7 @@ function handleSocketMessage(event) {
             notify(`Penalty: You drew a face-down penalty card.`);
             break;
         case 'cards_swapped':
+            pendingDrawnCard = null; // Ensure draw state is cleared
             notify(message.data.message);
             latestRoomState = message.data.room;
             renderBoard(message.data.room, playerContext.playerId);
@@ -371,6 +372,11 @@ function handleSocketMessage(event) {
             }
             break;
         case 'error':
+            // Auto-recover from state mismatch if backend says "No pending drawn card"
+            if (message.message === "No pending drawn card") {
+                pendingDrawnCard = null;
+                renderBoard(latestRoomState, playerContext.playerId); // Refresh UI to hide panel
+            }
             alert(message.message);
             break;
         default:
