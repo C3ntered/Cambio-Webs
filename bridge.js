@@ -226,7 +226,7 @@ function handleSocketMessage(event) {
             renderBoard(message.data.room, playerContext.playerId);
 
             // Highlight swapped cards
-            const { player1_id, card1_index, player2_id, card2_index } = message.data;
+            const { player1_id: player1_id_data, card1_index: card1_index_data, player2_id: player2_id_data, card2_index: card2_index_data } = message.data;
 
             const highlight = (pid, idx) => {
                  let btn = null;
