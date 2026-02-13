@@ -88,3 +88,8 @@ INFO:     127.0.0.1:33290 - "GET / HTTP/1.1" 200 OK
 INFO:     127.0.0.1:33290 - "GET /bridge.js HTTP/1.1" 200 OK
 INFO:     127.0.0.1:37276 - "GET /bridge.js HTTP/1.1" 304 Not Modified
 INFO:     127.0.0.1:34192 - "GET /bridge.js HTTP/1.1" 304 Not Modified
+INFO:     127.0.0.1:48142 - "GET / HTTP/1.1" 200 OK
+INFO:     127.0.0.1:48142 - "GET /bridge.js HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50426 - "GET /bridge.js HTTP/1.1" 304 Not Modified
+INFO:     127.0.0.1:50440 - "GET / HTTP/1.1" 200 OK
+INFO:     127.0.0.1:46630 - "GET /bridge.js HTTP/1.1" 304 Not Modified

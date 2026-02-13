@@ -83,11 +83,13 @@ class Room(BaseModel):
     max_players: int = 4
     min_players: int = 2
     num_decks: int = 1  # Number of decks to use (auto-calculated if >5 players)
+    initial_hand_size: int = 4  # Number of cards to deal per player
 
 class CreateRoomRequest(BaseModel):
     username: str
     max_players: int = 4
     num_decks: Optional[int] = None  # If None, auto-calculate based on player count (>5 = 2 decks)
+    initial_hand_size: int = 4  # 4, 6, or 8
 
 class JoinRoomRequest(BaseModel):
     username: str
@@ -132,7 +134,7 @@ class GameRoomManager:
         self.rooms: Dict[str, Room] = {}
         self.room_connections: Dict[str, Dict[str, WebSocket]] = {}  # room_id -> {player_id -> websocket}
     
-    def create_room(self, username: str, max_players: int = 8, num_decks: Optional[int] = None) -> Room:
+    def create_room(self, username: str, max_players: int = 8, num_decks: Optional[int] = None, initial_hand_size: int = 4) -> Room:
         """Create a new game room"""
         room_id = str(uuid.uuid4())[:8]
         player_id = str(uuid.uuid4())[:8]
@@ -154,7 +156,8 @@ class GameRoomManager:
             status=GameStatus.WAITING,
             created_at=datetime.now(),
             max_players=max_players,
-            num_decks=num_decks
+            num_decks=num_decks,
+            initial_hand_size=initial_hand_size
         )
         
         self.rooms[room_id] = room
@@ -209,7 +212,7 @@ class GameRoomManager:
         room.game_state.deck = deck
         
         # Deal cards to players (4 cards for Cambio base rules)
-        cards_per_player = 4
+        cards_per_player = room.initial_hand_size
         for player in room.players:
             player.hand = [room.game_state.deck.pop() for _ in range(cards_per_player)]
             player.last_draw_source = None
@@ -536,7 +539,12 @@ async def root():
 @app.post("/api/rooms", response_model=Room)
 async def create_room(request: CreateRoomRequest):
     """Create a new game room"""
-    room = room_manager.create_room(request.username, request.max_players, request.num_decks)
+    room = room_manager.create_room(
+        request.username,
+        request.max_players,
+        request.num_decks,
+        request.initial_hand_size
+    )
     return room
 
 @app.get("/api/rooms/{room_id}", response_model=Room)
