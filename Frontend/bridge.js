@@ -138,16 +138,43 @@ function handleSocketMessage(event) {
 
     switch (message.type) {
         case 'game_state':
+            // Just update board, no notification
+            latestRoomState = message.data.room;
+            renderBoard(message.data.room, message.data.your_player_id || playerContext.playerId);
+            break;
+
         case 'card_played':
+             if (message.data.player_id !== playerContext.playerId) {
+                 // Try to construct a message since backend doesn't send one
+                 const p = message.data.room.players.find(p => p.player_id === message.data.player_id);
+                 const name = p ? p.username : 'Unknown';
+                 const card = message.data.card ? formatCard(message.data.card) : 'a card';
+                 notify(`${name} played ${card}`);
+             }
+             latestRoomState = message.data.room;
+             renderBoard(message.data.room, message.data.your_player_id || playerContext.playerId);
+             break;
+
         case 'card_eliminated':
-        case 'player_drew_card':
         case 'player_penalty_draw':
             if (message.data.player_id !== playerContext.playerId) {
-                notify(message.data.message || 'A player played the wrong card and drew a penalty!');
+                notify(message.data.message || 'Action occurred');
             }
             latestRoomState = message.data.room;
             renderBoard(message.data.room, message.data.your_player_id || playerContext.playerId);
             break;
+
+        case 'player_drew_card':
+             if (message.data.player_id !== playerContext.playerId) {
+                 const p = message.data.room.players.find(p => p.player_id === message.data.player_id);
+                 const name = p ? p.username : 'Unknown';
+                 const source = message.data.source === 'discard' ? 'discard pile' : 'deck';
+                 notify(`${name} drew from ${source}`);
+             }
+             latestRoomState = message.data.room;
+             renderBoard(message.data.room, message.data.your_player_id || playerContext.playerId);
+             break;
+
         case 'deck_reshuffled':
         case 'cambio_called':
              notify(message.data.message);
@@ -1147,7 +1174,7 @@ function renderCardContent(element, card) {
     element.appendChild(bottomDiv);
 }
 
-function notify(text, duration = null) {
+function notify(text, duration = 3000) { // Set default duration to 3000ms
     console.log(text);
     const area = document.getElementById('notifications');
     if (area) {
