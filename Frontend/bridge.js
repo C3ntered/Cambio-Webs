@@ -1,10 +1,24 @@
 // Auto-detect API base URL from current page location
 // Works when HTML is served via HTTP (recommended) or falls back to localhost for file://
+// Auto-detect API base URL from current page location
+// Works when HTML is served via HTTP (recommended) or falls back to localhost for file://
 const getApiBase = () => {
     // If accessed via file:// protocol, default to localhost
     if (window.location.protocol === 'file:') {
         return 'http://localhost:8000';
     }
+    
+    // PRODUCTION: If on cambiogame.com, use Render backend
+    if (window.location.hostname === 'cambiogame.com' || 
+        window.location.hostname === 'www.cambiogame.com') {
+        return 'https://cambio-webs.onrender.com';
+    }
+    
+    // LOCAL DEVELOPMENT: If running on port 8080, point to backend on 8000
+    if (window.location.port === '8080') {
+        return 'http://localhost:8000';
+    }
+    
     // Otherwise use the current origin (protocol + hostname + port)
     // This works for both local development (http://localhost:8000)
     // and production (https://cambiogame.com)
