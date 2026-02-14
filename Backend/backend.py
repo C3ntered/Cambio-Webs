@@ -8,7 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, ConfigDict
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Set
 from datetime import datetime
 import uuid
 import random
@@ -19,20 +19,37 @@ from enum import Enum
 # Initialize FastAPI app
 app = FastAPI(title="Cambio Card Game API")
 
+# Define allowed origins
+default_origins = [
+    "https://cambiogame.com",
+    "https://www.cambiogame.com",
+    "http://localhost:8000",
+    "http://127.0.0.1:8000",
+]
+
+# Allow additional origins via environment variable
+env_origins = os.environ.get("ALLOWED_ORIGINS", "")
+if env_origins:
+    default_origins.extend([origin.strip() for origin in env_origins.split(",") if origin.strip()])
+
 # CORS middleware for frontend connection
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # In production, specify your frontend domain
+    allow_origins=default_origins,  # In production, specify your frontend domain
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 # Serve static files (bridge.js, etc.)
+# Serve static files (bridge.js, etc.)
 base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 frontend_dir = os.path.join(base_dir, "Frontend")
-static_dir = frontend_dir
-app.mount("/static", StaticFiles(directory=static_dir), name="static")
+if not os.path.exists(frontend_dir):
+    # Fallback if running from a different context
+    frontend_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "../Frontend")
+
+app.mount("/static", StaticFiles(directory=frontend_dir), name="static")
 
 # ============================================================================
 # Data Models (Pydantic)
@@ -586,7 +603,7 @@ async def root():
     html_path = os.path.join(frontend_dir, "index.html")
     if os.path.exists(html_path):
         return FileResponse(html_path)
-    return {"message": "Cambio Card Game API", "status": "running", "note": "index.html not found"}
+    return {"message": "Cambio Card Game API", "status": "running", "note": f"index.html not found in {frontend_dir}"}
 
 @app.get("/instructions")
 async def instructions():
@@ -624,7 +641,7 @@ async def join_room(room_id: str, request: JoinRoomRequest):
         return {
             "room": room,
             "player_id": player_id,
-            "websocket_url": f"ws://localhost:8000/ws/{room_id}"
+            "websocket_url": f"/ws/{room_id}"
         }
     except HTTPException as e:
         raise e
