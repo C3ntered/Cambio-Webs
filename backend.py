@@ -212,10 +212,10 @@ class GameRoomManager:
             room.num_decks = 2
         
         # Safety Check: If user forced 1 deck but we physically need more (e.g. 50 cards needed), force 2.
-        # Standard deck = 54 cards.
+        # Standard deck = 54 cards. 
         if total_drawn > 48 and room.num_decks == 1:
              room.num_decks = 2
-
+        
         # Create and shuffle deck(s)
         deck = self.create_deck(room.num_decks)
         random.shuffle(deck)
@@ -384,21 +384,21 @@ class GameRoomManager:
         room = self.rooms.get(room_id)
         if not room:
             return None
-
+        
         # Calculate scores
         for player in room.players:
             player.score = sum(get_card_value(card, room.red_king_variant) for card in player.hand if card)
-
+        
         # Determine winner: Lowest score, tie-breaker: fewest cards
         # Sort players by score (asc), then by hand size (asc)
         sorted_players = sorted(
-            room.players,
+            room.players, 
             key=lambda p: (p.score, len([c for c in p.hand if c]))
         )
-
+        
         winner = sorted_players[0] if sorted_players else None
         winner_id = winner.player_id if winner else None
-
+        
         if winner_id:
             self.end_game(room_id, winner_id)
         return winner_id
@@ -455,17 +455,17 @@ class GameRoomManager:
             # If "own_card_index" is present, it's the old format (Self <-> Other).
             # But the user specifically requested "any two cards".
             # Let's support a generalized format: "source" and "target" dicts.
-
+            
             source_pid = payload.get("source_player_id")
             source_idx = payload.get("source_card_index")
             target_pid = payload.get("target_player_id")
             target_idx = payload.get("target_card_index")
-
+            
             # Fallback for old frontend logic if not updated yet (though we will update frontend)
             if source_pid is None:
                 source_pid = acting_player.player_id
                 source_idx = payload.get("own_card_index")
-
+            
             if source_pid is None or source_idx is None or target_pid is None or target_idx is None:
                 return False
 
@@ -482,16 +482,16 @@ class GameRoomManager:
 
             source_p = next((p for p in room.players if p.player_id == source_pid), None)
             target_p = next((p for p in room.players if p.player_id == target_pid), None)
-
+            
             if not source_p or not target_p:
                 return False
-
+            
             if not validate_index(source_p.hand, source_idx) or not validate_index(target_p.hand, target_idx):
                 return False
-
+                
             # Execute Swap
             source_p.hand[source_idx], target_p.hand[target_idx] = target_p.hand[target_idx], source_p.hand[source_idx]
-
+            
             await self.broadcast_to_room(room_id, {
                 "type": "cards_swapped",
                 "data": {
@@ -509,7 +509,7 @@ class GameRoomManager:
             # Phase 1: Request to Look
             first = payload.get("first_target")
             second = payload.get("second_target")
-
+            
             def resolve_target(target_payload):
                 pid = target_payload.get("player_id")
                 idx = target_payload.get("card_index")
@@ -554,7 +554,7 @@ class GameRoomManager:
                     "message": "Review the cards. Do you want to swap them?"
                 }
             })
-
+            
             # Return True to indicate the *Look* action was successful, but we don't end turn yet
             # because pending_ability is now set to 'swap_decision'
             return True
@@ -586,12 +586,20 @@ async def root():
         return FileResponse(html_path)
     return {"message": "Cambio Card Game API", "status": "running", "note": "main.html not found"}
 
+@app.get("/instructions")
+async def instructions():
+    """Serve the instructions HTML file"""
+    html_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "instructions.html")
+    if os.path.exists(html_path):
+        return FileResponse(html_path)
+    return {"message": "Instructions not found", "status": "running"}
+
 @app.post("/api/rooms", response_model=Room)
 async def create_room(request: CreateRoomRequest):
     """Create a new game room"""
     room = room_manager.create_room(
-        request.username,
-        request.max_players,
+        request.username, 
+        request.max_players, 
         request.num_decks,
         request.initial_hand_size,
         request.red_king_variant
@@ -634,7 +642,7 @@ async def start_room_game(room_id: str):
     
     room_manager.start_game(room_id)
     room = room_manager.get_room(room_id)
-
+    
     # Broadcast game started event
     await room_manager.broadcast_to_room(room_id, {
         "type": "game_started",
@@ -642,7 +650,7 @@ async def start_room_game(room_id: str):
             "room": room.model_dump(mode='json')
         }
     })
-
+    
     return {"room": room, "message": "Game started successfully"}
 
 # ============================================================================
@@ -787,7 +795,7 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
                             played_card = hand_card
                             hand_index = card_index
                             card_found = True
-
+                
                 if not card_found:
                     # Fallback to search by value (if index not provided or mismatch)
                     for i, hand_card in enumerate(player.hand):
@@ -909,7 +917,7 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
                         "message": "You must use or skip your pending ability first"
                     })
                     continue
-
+                
                 # If deck is empty, reshuffle discard pile (keeping last card)
                 if not room.game_state.deck:
                     if len(room.game_state.discard_pile) <= 1:
@@ -971,7 +979,7 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
                 if room.status != GameStatus.PLAYING:
                     await websocket.send_json({"type": "error", "message": "Game is not active"})
                     continue
-
+                
                 if room.game_state.current_turn != player_id:
                     await websocket.send_json({"type": "error", "message": "Not your turn"})
                     continue
@@ -979,7 +987,7 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
                 if player.pending_drawn_card:
                     await websocket.send_json({"type": "error", "message": "Resolve your drawn card first"})
                     continue
-
+                
                 if not room.game_state.discard_pile:
                     await websocket.send_json({"type": "error", "message": "Discard pile is empty"})
                     continue
@@ -988,7 +996,7 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
                 player.pending_drawn_card = drawn_card
                 player.last_draw_source = "discard"
                 player.last_drawn_card = drawn_card
-
+                
                 await websocket.send_json({
                     "type": "card_drawn",
                     "data": {
@@ -997,7 +1005,7 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
                         "source": "discard"
                     }
                 })
-
+                
                 await room_manager.broadcast_to_room(room_id, {
                     "type": "player_drew_card",
                     "data": {
@@ -1077,7 +1085,7 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
                          # Check if player is "immune" because they called Cambio?
                          # "The person who called Canbio... is immune to any abilities."
                          # But this is the active player using their own ability.
-
+                         
                          player.pending_ability = ability_name
                          # Send ability opportunity
                          await websocket.send_json({
@@ -1115,10 +1123,10 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
                 if not player.pending_ability:
                     await websocket.send_json({"type": "error", "message": "No pending ability"})
                     continue
-
+                
                 payload = message.get("data", {})
                 ability_name = player.pending_ability
-
+                
                 resolved = await room_manager.resolve_card_ability(room, player, ability_name, payload)
                 if resolved:
                     # If the ability moved us to a decision state (like 'swap_decision'), do NOT end turn yet
@@ -1146,15 +1154,15 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
                 if player.pending_ability != "swap_decision" or not player.pending_swap_targets:
                     await websocket.send_json({"type": "error", "message": "No pending swap decision"})
                     continue
-
+                
                 do_swap = message.get("data", {}).get("swap", False)
                 targets = player.pending_swap_targets
-
+                
                 if do_swap:
                     # Execute swap
                     p1 = next((p for p in room.players if p.player_id == targets["first_player_id"]), None)
                     p2 = next((p for p in room.players if p.player_id == targets["second_player_id"]), None)
-
+                    
                     if p1 and p2:
                         idx1 = targets["first_card_index"]
                         idx2 = targets["second_card_index"]
@@ -1162,9 +1170,9 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
                         # Also check for None (though user might have swapped empty slots? Rules usually forbid swapping empty slots.
                         # But if we use None for holes, we probably shouldn't allow selecting holes.
                         # Let's ensure slots are not None.
-                        if (0 <= idx1 < len(p1.hand) and p1.hand[idx1] is not None and
+                        if (0 <= idx1 < len(p1.hand) and p1.hand[idx1] is not None and 
                             0 <= idx2 < len(p2.hand) and p2.hand[idx2] is not None):
-
+                            
                             p1.hand[idx1], p2.hand[idx2] = p2.hand[idx2], p1.hand[idx1]
                             room = room_manager.get_room(room_id)
                             await room_manager.broadcast_to_room(room_id, {
@@ -1178,11 +1186,11 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
                                     "room": room.model_dump(mode='json')
                                 }
                             })
-
+                
                 # Clear state and end turn
                 player.pending_ability = None
                 player.pending_swap_targets = None
-
+                
                 cambio_winner = room_manager.next_turn(room_id)
                 room = room_manager.get_room(room_id)
                 await room_manager.broadcast_to_room(room_id, {
@@ -1194,12 +1202,12 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
                         "type": "game_ended",
                         "data": {"winner_id": cambio_winner, "winner_username": next((p.username for p in room.players if p.player_id == cambio_winner), "Unknown"), "room": room.model_dump(mode='json')}
                     })
-
+            
             elif msg_type == "skip_ability":
                 if not player.pending_ability:
                     await websocket.send_json({"type": "error", "message": "No pending ability"})
                     continue
-
+                
                 player.pending_ability = None
                 # End turn
                 cambio_winner = room_manager.next_turn(room_id)
@@ -1336,7 +1344,7 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
                         "message": "Target player not found"
                     })
                     continue
-
+                
                 # Check replacement card if targeting opponent
                 if target_id != player_id:
                     if replacement_index is None:
@@ -1416,20 +1424,20 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
                 removed_card = target_player.hand[target_index]
                 target_player.hand[target_index] = None # Create hole
                 room.game_state.discard_pile.append(removed_card)
-
+                
                 msg_extra = ""
                 if target_id != player_id:
                      # Move replacement card
                      # Wait, if we use None for holes, popping changes indices. We should set to None.
                      # But rule says: "I give them one of my cards, and that card goes to that bottom left position".
                      # So target slot gets filled. My slot becomes None (or shifted?).
-                     # User said: "If I get rid of the top right card, there should just be a hole there".
+                     # User said: "If I get rid of the top right card, there should just be a hole there". 
                      # But for swapping replacement: "I give them one of my cards, and that card goes to that bottom left position".
                      # This implies target hole is filled immediately.
                      # But my card leaves a hole in MY hand?
                      # "If I get rid of the top right card... hole there". This context was elimination without replacement (self elimination or just hole logic).
                      # Let's assume replacement fills the hole. And the GIVER gets a hole.
-
+                     
                      if player.hand[replacement_index] is None:
                          await websocket.send_json({"type": "error", "message": "Cannot replace with an empty slot"})
                          continue
@@ -1437,9 +1445,9 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
                      replacement_card = player.hand[replacement_index]
                      player.hand[replacement_index] = None # Giver gets a hole
                      target_player.hand[target_index] = replacement_card # Target hole filled
-
+                     
                      msg_extra = " and gave them a replacement card"
-
+                
                 room = room_manager.get_room(room_id)
 
                 # Eliminations don't end your turn - you can do as many as you want
@@ -1524,8 +1532,8 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
                 # Reset game state
                 room.status = GameStatus.WAITING
                 room.game_state = GameState()
-
-                # Reset player hands and states (but keep scores? User said "Play Again" usually implies fresh start or round.
+                
+                # Reset player hands and states (but keep scores? User said "Play Again" usually implies fresh start or round. 
                 # Let's keep scores if they want to track rounds, but clear hands.)
                 # "it bring us back to the start lobby and shows the players" -> usually implies full reset or new round.
                 # Let's reset everything for a fresh game as per "bring us back to the start lobby".
@@ -1538,10 +1546,10 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
                     p.pending_swap_targets = None
                     # Optional: Reset score if it's a new game? Or keep for session?
                     # "bring us back to the start lobby" sounds like a full reset.
-                    # But often friends play multiple rounds. Let's keep scores for now?
+                    # But often friends play multiple rounds. Let's keep scores for now? 
                     # User: "shows the players".
                     # Let's NOT reset scores so they can see who is winning overall.
-
+                
                 # Broadcast reset
                 await room_manager.broadcast_to_room(room_id, {
                     "type": "game_reset",
@@ -1583,5 +1591,4 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
 
 if __name__ == "__main__":
     import uvicorn
-    port = int(os.environ.get("PORT", 8000))
-    uvicorn.run(app, host="0.0.0.0", port=port)
+    uvicorn.run(app, host="0.0.0.0", port=8000)

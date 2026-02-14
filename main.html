@@ -71,7 +71,7 @@
             flex-direction: column;
             gap: 20px;
         }
-
+        
         #room-info {
             background-color: rgba(0, 0, 0, 0.3);
             color: white;
@@ -102,7 +102,7 @@
         #copy-room-id:hover {
             background-color: rgba(255, 255, 255, 0.3);
         }
-
+        
         #player-list {
             background-color: rgba(255, 255, 255, 0.9);
             padding: 10px;
@@ -215,7 +215,7 @@
         .opponent-cards button:hover:not(:disabled) {
              transform: scale(1.05);
         }
-
+        
         #play-area {
             display: flex;
             justify-content: center;
@@ -223,7 +223,7 @@
             gap: 40px;
             padding: 20px;
         }
-
+        
         #discard-pile {
             background-color: rgba(255, 255, 255, 0.2);
             padding: 20px;
@@ -241,7 +241,7 @@
             border-radius: 12px;
             color: white;
         }
-
+        
         .action-buttons {
             margin: 20px 0;
             display: flex;
@@ -270,7 +270,7 @@
             transform: none;
             box-shadow: none;
         }
-
+        
         #card-container {
             display: grid;
             grid-auto-flow: column;
@@ -279,7 +279,7 @@
             margin-top: 20px;
             justify-content: center;
         }
-
+        
         #card-container button {
             padding: 5px;
             font-size: 14px;
@@ -310,10 +310,10 @@
             flex-direction: column;
             align-items: center;
             line-height: 1;
-            font-size: 20px;
+            font-size: 20px; 
         }
         .card-center {
-            font-size: 48px;
+            font-size: 48px; 
             line-height: 1;
         }
         .card-corner-bottom {
@@ -323,7 +323,7 @@
             align-items: center;
             line-height: 1;
             transform: rotate(180deg);
-            font-size: 20px;
+            font-size: 20px; 
         }
         .card-red {
             color: #d32f2f;
@@ -334,7 +334,7 @@
             border-color: #212121 !important;
         }
         .card-special-king {
-            color: #b71c1c;
+            color: #b71c1c; 
             border-color: #b71c1c !important;
             background-color: #ffebee !important;
         }
@@ -362,7 +362,7 @@
             70% { box-shadow: 0 0 0 10px rgba(255, 152, 0, 0); }
             100% { box-shadow: 0 0 0 0 rgba(255, 152, 0, 0); }
         }
-
+        
         #notifications {
             position: fixed;
             bottom: 20px;
@@ -388,15 +388,15 @@
 
         /* Modal for Game Over */
         #game-over-modal {
-            display: none;
-            position: fixed;
-            z-index: 1000;
+            display: none; 
+            position: fixed; 
+            z-index: 1000; 
             left: 0;
             top: 0;
-            width: 100%;
-            height: 100%;
-            overflow: auto;
-            background-color: rgba(0,0,0,0.8);
+            width: 100%; 
+            height: 100%; 
+            overflow: auto; 
+            background-color: rgba(0,0,0,0.8); 
             justify-content: center;
             align-items: center;
         }
@@ -451,7 +451,7 @@
         <h2 style="margin-top:0;">Join / Create Game</h2>
         <input type="text" id="username" placeholder="Enter username">
         <input type="text" id="room-id" placeholder="Room ID (leave blank to create)">
-
+        
         <label for="hand-size-select" style="display:block; margin-top:10px; font-size:14px; color:#666;">Starting Hand Size (for new rooms):</label>
         <select id="hand-size-select">
             <option value="4" selected>4 Cards</option>
@@ -464,15 +464,16 @@
             <option value="1" selected>1 Deck (Standard)</option>
             <option value="2">2 Decks (For >4 Players)</option>
         </select>
-
+        
         <div style="margin-top: 10px; text-align: left; padding: 0 10px;">
             <label style="font-size: 14px; color: #666; cursor: pointer; display: flex; align-items: center;">
-                <input type="checkbox" id="red-king-variant" style="width: auto; margin-right: 8px;">
+                <input type="checkbox" id="red-king-variant" style="width: auto; margin-right: 8px;"> 
                 Red King = -2 (Variant)
             </label>
         </div>
 
         <button onclick="handleJoin()" style="margin-top:15px;">Join Game</button>
+        <a href="/instructions" style="display:block; margin-top:10px; color:#4CAF50; text-decoration:none; font-weight:bold;">How to Play</a>
         <p id="status"></p>
     </div>
 
@@ -485,15 +486,15 @@
             <button id="copy-room-id" onclick="copyRoomId()">Copy Room ID</button>
             <div style="margin-left: 20px;">
                 <label style="color: white; cursor: pointer;">
-                    <!-- <input type="checkbox" id="admin-mode-toggle" onchange="toggleAdminMode()"> Admin Mode -->
+                    <input type="checkbox" id="admin-mode-toggle" onchange="toggleAdminMode()"> Admin Mode
                 </label>
             </div>
         </div>
-
+        
         <div id="player-list">
             <h3>Players</h3>
         </div>
-
+        
         <button id="start-game-btn" onclick="startGame()" style="display:none;">Start Game</button>
         <h2 id="turn-indicator">Waiting for players...</h2>
 
@@ -513,15 +514,15 @@
 
             <div id="my-hand">
                 <h3 style="margin-top:0;">Your Hand</h3>
-
+                
                 <div id="viewing-countdown" style="display:none; font-size: 48px; text-align: center; margin: 10px 0; color: #FF9800; text-shadow: 2px 2px 4px #000;"></div>
-
+                
                 <div id="draw-choice-panel" style="display:none; padding: 15px; background: #fff3e0; border-radius: 8px; margin: 15px 0; border: 2px solid #ff9800; color: #333;">
                     <p><strong>You drew:</strong> <span id="drawn-card-display"></span></p>
                     <p>Swap with a hand card (any card), or discard to pile:</p>
                     <button id="discard-drawn-btn" onclick="resolveDraw('discard')">Discard to pile</button>
                 </div>
-
+                
                 <div id="ability-panel" style="display:none; padding: 15px; background: #e0f7fa; border-radius: 8px; margin: 15px 0; border: 2px solid #00acc1; color: #333;">
                     <p><strong>Ability Available:</strong> <span id="ability-name-display"></span></p>
                     <p id="ability-desc">Do you want to use this ability?</p>
@@ -534,11 +535,11 @@
                     <button id="draw-discard-btn" onclick="drawFromDiscard()">Draw from Discard</button>
                     <button id="call-cambio-btn" onclick="callCambio()">Call Cambio</button>
                 </div>
-
+                
                 <div id="card-container"></div>
             </div>
         </div>
-
+        
         <!-- Game Over Modal -->
         <div id="game-over-modal">
             <div class="modal-content">
