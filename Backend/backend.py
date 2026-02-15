@@ -51,12 +51,19 @@ if not os.path.exists(frontend_dir):
     # Fallback if running from a different context
     frontend_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "../Frontend")
 
+# Explicit route for rules.pdf to ensure it's served correctly
+@app.get("/static/rules.pdf")
+async def get_rules_pdf():
+    pdf_path = os.path.join(frontend_dir, "rules.pdf")
+    if os.path.exists(pdf_path):
+        return FileResponse(pdf_path, media_type="application/pdf")
+    return {"error": "File not found", "path": pdf_path}
+
 app.mount("/static", StaticFiles(directory=frontend_dir), name="static")
 
 # ============================================================================
 # Data Models (Pydantic)
 # ============================================================================
-
 class GameStatus(str, Enum):
     WAITING = "waiting"
     PLAYING = "playing"
