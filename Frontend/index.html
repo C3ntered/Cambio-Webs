@@ -29,6 +29,24 @@
             width: 100%;
             max-width: 400px;
             text-align: center;
+            position: relative;
+        }
+        .coffee-button {
+            position: absolute;
+            top: 15px;
+            right: 15px;
+            background-color: #efebe9;
+            color: #5d4037;
+            padding: 8px 12px;
+            border-radius: 20px;
+            text-decoration: none;
+            font-size: 14px;
+            font-weight: bold;
+            transition: background-color 0.2s, transform 0.2s;
+        }
+        .coffee-button:hover {
+            background-color: #d7ccc8;
+            transform: translateY(-2px);
         }
         #lobby input, #lobby select {
             display: block;
@@ -474,6 +492,7 @@
 
         <button onclick="handleJoin()" style="margin-top:15px;">Join Game</button>
         <a href="/rules.pdf" target = "_blank" style="display:block; margin-top:10px; color:#4CAF50; text-decoration:none; font-weight:bold;">How to Play</a>
+        <a href="https://buy.stripe.com/test_eVqbIUcY0g6H2UR7BU0Jq00" target="_blank" class="coffee-button">Buy me a coffee ☕</a>
         <p id="status"></p>
     </div>
 
