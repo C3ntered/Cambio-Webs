@@ -752,6 +752,7 @@ function renderBoard(room, yourPlayerId) {
     if (lobby && board) {
         lobby.style.display = 'none';
         board.style.display = 'block';
+        if (room.status?.toLowerCase() === 'waiting') { board.classList.add('mode-waiting'); board.classList.remove('mode-playing'); } else { board.classList.add('mode-playing'); board.classList.remove('mode-waiting'); }
     }
 
     // Update room ID display
