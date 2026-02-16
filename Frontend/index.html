@@ -49,17 +49,6 @@
         #lobby button:hover {
             background-color: #45a049;
         }
-        .coffee-button {
-            display: inline-block;
-            margin-top: 15px;
-            padding: 8px 15px;
-            background-color: #FFDD00;
-            color: #000;
-            text-decoration: none;
-            border-radius: 5px;
-            font-weight: bold;
-            font-size: 14px;
-        }
 
         /* Game Board Layout */
         #game-board {
@@ -88,7 +77,7 @@
             justify-content: center;
         }
         #game-board.mode-waiting #turn-indicator {
-            display: none; /* Hide turn indicator in lobby */
+            display: none;
         }
 
         /* Mode: Playing */
@@ -132,41 +121,35 @@
             font-weight: bold;
         }
 
-        /* Game Elements Layout */
+        /* Game Elements Layout - Vertical Stack */
         #game-elements {
             flex: 1;
             display: flex;
             flex-direction: column;
             position: relative;
+            justify-content: space-between; /* Space out top, middle, bottom */
+            padding: 10px 0;
         }
 
         /* Top: Opponents */
         #opponents-hands {
-            flex: 0 0 auto;
-            padding: 10px 0;
+            flex: 0 0 auto; /* Don't grow */
+            padding: 5px 0;
             background: rgba(0,0,0,0.05);
             overflow-x: auto;
             white-space: nowrap;
             display: flex;
-            justify-content: center; /* Center if few players */
+            justify-content: center;
             align-items: center;
-            min-height: 140px;
-            /* Scrollbar styling */
-            scrollbar-width: thin;
-            scrollbar-color: rgba(255,255,255,0.3) transparent;
+            min-height: 100px; /* Reduced height */
+            scrollbar-width: none; /* Hide scrollbar for cleaner look */
         }
-        #opponents-hands::-webkit-scrollbar {
-            height: 6px;
-        }
-        #opponents-hands::-webkit-scrollbar-thumb {
-            background-color: rgba(255,255,255,0.3);
-            border-radius: 3px;
-        }
+        #opponents-hands::-webkit-scrollbar { display: none; }
 
         #opponents-container {
             display: flex;
             gap: 15px;
-            padding: 0 20px;
+            padding: 0 10px;
             align-items: center;
         }
 
@@ -174,26 +157,26 @@
             display: inline-flex;
             flex-direction: column;
             align-items: center;
-            background: rgba(255,255,255,0.1); /* Subtle background for each opponent */
+            background: rgba(255,255,255,0.1);
             padding: 5px;
             border-radius: 8px;
             transition: transform 0.2s;
         }
-        /* Active player highlight handled by JS class usually, but let's ensure style exists */
-        .opponent-wrapper.active-turn {
-            border: 2px solid #FFD700;
-            box-shadow: 0 0 10px #FFD700;
-            transform: scale(1.05);
+        .opponent-wrapper h4 {
+            margin: 2px 0;
+            font-size: 12px;
+            color: #eee;
         }
 
         /* Middle: Play Area */
         #play-area {
-            flex: 1;
+            flex: 1; /* Take remaining space */
             display: flex;
             justify-content: center;
             align-items: center;
-            gap: 30px; /* Space between deck/discard/cambio */
+            gap: 30px;
             position: relative;
+            min-height: 150px;
         }
 
         /* Deck & Discard */
@@ -212,13 +195,13 @@
         
         /* Card Styles */
         .game-card {
-            width: 80px;
-            height: 120px;
-            border-radius: 8px;
+            width: 70px; /* Reduced from 80 */
+            height: 105px; /* Reduced from 120 */
+            border-radius: 6px;
             display: flex;
             justify-content: center;
             align-items: center;
-            font-size: 24px;
+            font-size: 20px;
             box-shadow: 2px 2px 5px rgba(0,0,0,0.3);
             background-color: white;
             color: black;
@@ -236,15 +219,29 @@
         .card-back::after {
             content: "🂠";
             color: white;
-            font-size: 40px;
+            font-size: 30px;
             text-shadow: 1px 1px 2px rgba(0,0,0,0.5);
             display: block;
         }
 
-        /* Opponent Cards - Match Player Cards EXACTLY but smaller if needed */
+        /* Target Styling (Overlay on card back) */
+        .card-target-overlay {
+            position: absolute;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(255, 215, 0, 0.3);
+            border: 2px solid gold;
+            border-radius: 6px;
+            pointer-events: none;
+            display: none; /* Toggled by JS class */
+        }
+        .being-looked-at .card-target-overlay {
+            display: block;
+        }
+
+        /* Opponent Cards - Smaller */
         .opponent-cards button {
-            width: 50px !important;
-            height: 75px !important;
+            width: 40px !important;
+            height: 60px !important;
             padding: 0 !important;
             border: 1px solid #333 !important;
             border-radius: 4px !important;
@@ -253,22 +250,22 @@
             background-color: white !important;
             color: black !important;
             cursor: default;
-            margin: 0 2px; /* Small gap between cards */
+            margin: 0 2px;
         }
-        
+
         .opponent-cards button.card-back {
             background: linear-gradient(135deg, #1565C0 25%, #1976D2 25%, #1976D2 50%, #1565C0 50%, #1565C0 75%, #1976D2 75%, #1976D2 100%) !important;
             background-size: 10px 10px !important;
         }
         .opponent-cards button.card-back::after {
             content: "🂠";
-            font-size: 18px;
+            font-size: 16px;
         }
 
         /* Bottom: My Hand */
         #my-hand {
             flex: 0 0 auto;
-            padding: 10px 20px 20px 20px; /* Top Right Bottom Left */
+            padding: 10px 20px;
             background: rgba(0,0,0,0.2);
             border-radius: 12px 12px 0 0;
             display: flex;
@@ -276,25 +273,25 @@
             align-items: center;
             width: 100%;
             box-sizing: border-box;
-            max-width: 800px; /* Don't stretch too wide on desktop */
-            margin: 0 auto; /* Center horizontally */
+            max-width: 600px; /* Keep it focused */
+            margin: 0 auto;
         }
 
         #card-container {
             display: flex;
-            gap: 15px;
+            gap: 10px;
             justify-content: center;
-            flex-wrap: wrap; /* Allow wrap if many cards */
+            flex-wrap: wrap;
         }
 
         #card-container button {
-            width: 80px;
-            height: 120px;
-            border-radius: 8px;
+            width: 70px;
+            height: 105px;
+            border-radius: 6px;
             border: 2px solid #333;
             cursor: pointer;
             transition: transform 0.2s, box-shadow 0.2s;
-            font-size: 24px;
+            font-size: 20px;
             background-color: white;
             color: black;
             padding: 5px;
@@ -320,7 +317,7 @@
         #call-cambio-btn {
             background-color: #f44336;
             padding: 15px 30px;
-            font-size: 20px;
+            font-size: 18px;
             font-weight: bold;
             border-radius: 50px;
             border: none;
@@ -337,6 +334,30 @@
             background-color: #aaa;
             cursor: not-allowed;
             box-shadow: none;
+            opacity: 0.5;
+        }
+
+        /* Ability Panel (Floating overlay or integrated) */
+        #ability-panel {
+            position: absolute;
+            bottom: 140px; /* Above hand */
+            left: 50%;
+            transform: translateX(-50%);
+            background: white;
+            padding: 15px;
+            border-radius: 8px;
+            color: #333;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.4);
+            z-index: 500;
+            text-align: center;
+            width: 80%;
+            max-width: 300px;
+        }
+
+        #ability-controls {
+            display: flex;
+            justify-content: center;
+            gap: 10px;
         }
 
         /* Turn Indicator */
@@ -344,66 +365,24 @@
             font-size: 16px;
             color: rgba(255, 255, 255, 0.8);
             text-align: right;
-            margin-left: auto; /* Push to right in flex container */
+            margin-left: auto;
         }
-        /* When it's my turn highlight */
         #turn-indicator.my-turn {
             color: #FFD700;
             text-shadow: 0 0 10px rgba(0,0,0,0.5);
             font-weight: bold;
         }
 
-        /* Waiting Screen (Lobby Elements) */
-        #lobby-elements {
-            background: white;
-            color: #333;
-            padding: 30px;
-            border-radius: 12px;
-            box-shadow: 0 10px 25px rgba(0,0,0,0.2);
-            text-align: center;
-            max-width: 500px;
-            width: 90%;
-            margin: auto;
-        }
-        #player-list ul {
-            list-style: none;
-            padding: 0;
-            text-align: left;
-            max-height: 250px;
-            overflow-y: auto;
-            border: 1px solid #eee;
-            border-radius: 4px;
-            margin-bottom: 20px;
-        }
-        #player-list li {
-            padding: 10px;
-            border-bottom: 1px solid #eee;
-        }
-        #start-game-btn {
-            width: 100%;
-            padding: 15px;
-            background-color: #FF9800;
-            color: white;
-            border: none;
-            border-radius: 8px;
-            font-size: 18px;
-            cursor: pointer;
-            font-weight: bold;
-        }
-        #start-game-btn:hover {
-            background-color: #F57C00;
-        }
-
         /* Notifications */
         #notifications {
             position: fixed;
-            top: 60px; /* Below header */
+            top: 60px;
             right: 20px;
             z-index: 2000;
             display: flex;
             flex-direction: column;
             gap: 10px;
-            pointer-events: none; /* Let clicks pass through */
+            pointer-events: none;
         }
         #notifications div {
             background: rgba(0,0,0,0.8);
@@ -448,19 +427,19 @@
             cursor: pointer;
             color: #aaa;
         }
-        .close-modal:hover { color: #000; }
 
         /* Mobile Adjustments */
         @media (max-height: 700px) {
             .game-card, #card-container button {
-                width: 60px;
-                height: 90px;
-                font-size: 18px;
+                width: 50px;
+                height: 75px;
+                font-size: 16px;
             }
-            .card-back::after { font-size: 30px; }
-            #opponents-hands { min-height: 100px; }
-            .opponent-cards button { width: 40px !important; height: 60px !important; }
-            #my-hand { padding: 10px; }
+            .card-back::after { font-size: 24px; }
+            #opponents-hands { min-height: 80px; }
+            .opponent-cards button { width: 30px !important; height: 45px !important; }
+            #my-hand { padding: 5px; }
+            #ability-panel { bottom: 100px; }
         }
     </style>
 </head>
@@ -556,25 +535,25 @@
 
             <!-- Player Hand -->
             <div id="my-hand">
-                <!-- Action Panels (Draw/Ability) -->
                 <div id="viewing-countdown" style="display:none; font-size: 24px; color: #FF9800; margin-bottom:10px;"></div>
 
-                <div id="draw-choice-panel" style="display:none; margin-bottom:10px; background:white; padding:10px; border-radius:8px; color:#333; box-shadow:0 4px 10px rgba(0,0,0,0.3);">
-                    <div style="display:flex; align-items:center; gap:10px;">
+                <div id="draw-choice-panel" style="display:none; margin-bottom:10px; background:white; padding:10px; border-radius:8px; color:#333; box-shadow:0 4px 10px rgba(0,0,0,0.3); width:100%; max-width:400px;">
+                    <div style="display:flex; align-items:center; justify-content:space-between; gap:10px;">
                         <span>You drew: <strong id="drawn-card-display"></strong></span>
                         <button id="discard-drawn-btn" onclick="resolveDraw('discard')" style="padding:5px 10px; background:#f44336; color:white; border:none; border-radius:4px; cursor:pointer;">Discard</button>
                     </div>
                     <div style="font-size:12px; margin-top:5px; color:#666;">Or click a card in your hand to swap</div>
                 </div>
 
-                <div id="ability-panel" style="display:none; margin-bottom:10px; background:white; padding:10px; border-radius:8px; color:#333; box-shadow:0 4px 10px rgba(0,0,0,0.3);">
+                <!-- Ability Panel Floating -->
+                <div id="ability-panel" style="display:none;">
                     <strong>Ability: <span id="ability-name-display"></span></strong>
                     <div id="ability-desc" style="font-size:12px; margin:5px 0;"></div>
-                    <div id="ability-controls"></div>
+                    <div id="ability-controls" style="margin:10px 0;"></div>
                     <button onclick="skipAbility()" style="margin-top:5px; padding:5px 10px; background:#9E9E9E; color:white; border:none; border-radius:4px; cursor:pointer;">Skip</button>
                 </div>
 
-                <div class="action-buttons"></div> <!-- Placeholder if bridge.js uses it, though I don't recall seeing it used -->
+                <div class="action-buttons"></div>
 
                 <div id="card-container"></div>
             </div>

@@ -47,8 +47,8 @@ let selectedTargets = [];     // Targets selected so far
 let pendingSwapDecision = false; // Mode for deciding whether to swap
 let eliminationTarget = null; // Target for elimination (waiting for replacement card selection)
 let adminMode = false;
-let isAnimating = false;
-let activeLookIndicators = {}; // State of cards being looked at
+let isAnimating = false; let pendingRoomState = null;
+let activeLookIndicators = {};
 
 async function joinGame(username, roomId = null) {
     if (!username) {
@@ -740,7 +740,8 @@ function getVisualOrder(totalCards) {
 
 function renderBoard(room, yourPlayerId) {
     if (isAnimating) {
-        console.log('Skipping render due to animation');
+        console.log('Skipping render due to animation, buffering state');
+        pendingRoomState = room;
         return;
     }
     if (!room) {
@@ -1441,6 +1442,13 @@ function animateSwap(player1_id, card1_index, player2_id, card2_index, callback)
     if (!el1 || !el2) {
         console.warn('animateSwap: Elements not found. el1:', !!el1, 'el2:', !!el2);
         isAnimating = false;
+        if (pendingRoomState) {
+            console.log('Rendering buffered state');
+            const state = pendingRoomState;
+            pendingRoomState = null;
+let activeLookIndicators = {};
+            renderBoard(state, playerContext.playerId);
+        }
         if (callback) callback();
         return;
     }
@@ -1497,6 +1505,13 @@ function animateSwap(player1_id, card1_index, player2_id, card2_index, callback)
         el2.style.visibility = 'visible';
 
         isAnimating = false;
+        if (pendingRoomState) {
+            console.log('Rendering buffered state');
+            const state = pendingRoomState;
+            pendingRoomState = null;
+let activeLookIndicators = {};
+            renderBoard(state, playerContext.playerId);
+        }
         console.log('Animation finished, calling callback');
         if (callback) callback();
     }, 700);
