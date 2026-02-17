@@ -1035,8 +1035,8 @@ function renderBoard(room, yourPlayerId) {
             if (me) {
                 const isAwaitingDrawChoice = !!pendingDrawnCard;
                 
-                // Explicit grid placement: grows in X (columns), 2 rows fixed
-                // index 0 -> col1/row1, index 1 -> col1/row2, index 2 -> col2/row1, etc.
+                // Explicit placement: col=floor(index/2)+1, row=(index%2)+1
+                // Grows rightward: col1=[0,1], col2=[2,3], col3=[4,5]...
                 me.hand.forEach((card, index) => {
                     const btn = document.createElement('button');
                     btn.setAttribute('data-index', index);
@@ -1123,7 +1123,7 @@ function renderBoard(room, yourPlayerId) {
                 const cardsDiv = document.createElement('div');
                 cardsDiv.className = 'opponent-cards';
                 
-                // Explicit grid placement: grows in X (columns), 2 rows fixed
+                // Explicit placement: grows rightward
                 player.hand.forEach((_, index) => {
                     const card = player.hand[index];
                     const btn = document.createElement('button');
