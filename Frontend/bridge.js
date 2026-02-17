@@ -1035,13 +1035,12 @@ function renderBoard(room, yourPlayerId) {
             if (me) {
                 const isAwaitingDrawChoice = !!pendingDrawnCard;
                 
-                // Explicit placement: col=floor(index/2)+1, row=(index%2)+1
-                // Grows rightward: col1=[0,1], col2=[2,3], col3=[4,5]...
+                // Insert cards in index order 0,1,2,3...
+                // Column-flow CSS places them: [0][2][4] top row, [1][3][5] bottom row
+                // New cards always append to a new column - positions never shift
                 me.hand.forEach((card, index) => {
                     const btn = document.createElement('button');
                     btn.setAttribute('data-index', index);
-                    btn.style.gridColumn = Math.floor(index / 2) + 1;
-                    btn.style.gridRow = (index % 2) + 1;
                     
                     if (!card) {
                         // Empty slot (hole)
@@ -1051,7 +1050,7 @@ function renderBoard(room, yourPlayerId) {
                         btn.style.background = "transparent";
                         btn.style.cursor = "default";
                     } else {
-                        // Bottom row = row 2 = odd indices (1, 3, 5...)
+                        // Bottom row = odd indices (1, 3, 5...) in column-flow layout
                         const isBottomCard = (index % 2) === 1;
                         const isVisible = (isViewingPhase && isBottomCard) || adminMode || (activeLookIndicators[yourPlayerId] && activeLookIndicators[yourPlayerId][index] === "PERSIST");
                         
@@ -1123,13 +1122,11 @@ function renderBoard(room, yourPlayerId) {
                 const cardsDiv = document.createElement('div');
                 cardsDiv.className = 'opponent-cards';
                 
-                // Explicit placement: grows rightward
+                // Insert in index order - column-flow CSS handles stable placement
                 player.hand.forEach((_, index) => {
                     const card = player.hand[index];
                     const btn = document.createElement('button');
                     btn.setAttribute('data-index', index);
-                    btn.style.gridColumn = Math.floor(index / 2) + 1;
-                    btn.style.gridRow = (index % 2) + 1;
                     
                     if (!card) {
                         // Empty slot
