@@ -6,17 +6,6 @@
 <meta content="width=device-width, initial-scale=1.0" name="viewport"/>
 <title>Cambio Card Game</title>
 <style>
-    /* Scale down content for 80x120px cards (Opponents, Discard Pile) */
-    .opponent-cards .card-corner-top,
-    .opponent-cards .card-corner-bottom,
-    .card-display .card-corner-top,
-    .card-display .card-corner-bottom {
-        font-size: 14px;
-    }
-    .opponent-cards .card-center,
-    .card-display .card-center {
-        font-size: 32px;
-    }
         body {
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
             margin: 0;
@@ -527,8 +516,8 @@
             border-radius: 8px;
             background-color: white;
             cursor: pointer;
-            width: 80px;  /* Unified width */
-            height: 120px; /* Unified height */
+            width: 100px;  /* Unified width */
+            height: 140px; /* Unified height */
             box-sizing: border-box;
             display: flex;
             flex-direction: column;
@@ -547,8 +536,8 @@
         /* Opponent cards specific overrides if needed (removed tiny size) */
         .opponent-cards button {
             /* Now using .game-card dimensions via class or shared style */
-            width: 80px !important;
-            height: 120px !important;
+            width: 100px !important;
+            height: 140px !important;
             font-size: 14px; /* Ensure font size is readable if text is shown */
         }
 
@@ -617,8 +606,8 @@
             border-radius: 8px;
             background-color: white;
             cursor: pointer;
-            width: 80px;  /* Unified width */
-            height: 120px; /* Unified height */
+            width: 100px;  /* Unified width */
+            height: 140px; /* Unified height */
             box-sizing: border-box;
             display: flex;
             flex-direction: column;
@@ -637,8 +626,8 @@
         /* Opponent cards specific overrides if needed (removed tiny size) */
         .opponent-cards button {
             /* Now using .game-card dimensions via class or shared style */
-            width: 80px !important;
-            height: 120px !important;
+            width: 100px !important;
+            height: 140px !important;
             font-size: 14px; /* Ensure font size is readable if text is shown */
         }
 
@@ -880,8 +869,8 @@
 
     /* Force opponent cards to match player cards exactly */
     .opponent-cards button {
-        width: 80px !important;
-        height: 120px !important;
+        width: 100px !important;
+        height: 140px !important;
         padding: 5px !important;
         border: 2px solid #333 !important;
         border-radius: 8px !important;
