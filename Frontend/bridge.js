@@ -7,8 +7,6 @@ const GAME_STATUS = {
 
 // Auto-detect API base URL from current page location
 // Works when HTML is served via HTTP (recommended) or falls back to localhost for file://
-// Auto-detect API base URL from current page location
-// Works when HTML is served via HTTP (recommended) or falls back to localhost for file://
 const getApiBase = () => {
     // If accessed via file:// protocol, default to localhost
     if (window.location.protocol === 'file:') {
@@ -194,13 +192,14 @@ function handleSocketMessage(event) {
             notify(message.data.message);
             latestRoomState = message.data.room;
             renderBoard(message.data.room, message.data.your_player_id || playerContext.playerId);
-            break;
-        case 'grace_period_started':
-            notify(message.data.message);
-            latestRoomState = message.data.room;
-            renderBoard(message.data.room, message.data.your_player_id || playerContext.playerId);
+            startGracePeriodCountdown(10);
             break;
         case 'game_ended':
+            // Clear grace period countdown if still running
+            if (gracePeriodTimer !== null) {
+                clearInterval(gracePeriodTimer);
+                gracePeriodTimer = null;
+            }
             // Show Game Over Modal
             if (message.data.room) {
                 latestRoomState = message.data.room;
@@ -840,7 +839,7 @@ function renderBoard(room, yourPlayerId) {
             turnIndicator.style.backgroundColor = '#FF9800';
         } else if (room.status?.toLowerCase() === GAME_STATUS.GRACE_PERIOD) {
             turnIndicator.style.backgroundColor = '#9C27B0';
-            turnIndicator.innerHTML = 'Grace Period! Eliminate matching cards (10s) <br>';
+            turnIndicator.innerHTML = 'Grace Period! Eliminate matching cards (<span id="grace-countdown">10</span>s) <br>';
 
             const tallyBtn = document.createElement('button');
             tallyBtn.id = 'tally-scores-btn';
@@ -1420,11 +1419,31 @@ async function handleJoin() {
     }
 }
 
-function tallyScores() {
-    sendMessage('tally_scores');
+let gracePeriodTimer = null;
+
+function startGracePeriodCountdown(seconds) {
+    // Clear any existing timer
+    if (gracePeriodTimer !== null) {
+        clearInterval(gracePeriodTimer);
+        gracePeriodTimer = null;
+    }
+
+    let remaining = seconds;
+
+    gracePeriodTimer = setInterval(() => {
+        remaining -= 1;
+
+        const el = document.getElementById('grace-countdown');
+        if (el) el.textContent = remaining;
+
+        if (remaining <= 0) {
+            clearInterval(gracePeriodTimer);
+            gracePeriodTimer = null;
+            tallyScores();
+        }
+    }, 1000);
 }
 
-window.tallyScores = tallyScores;
 function tallyScores() {
     sendMessage('tally_scores');
 }

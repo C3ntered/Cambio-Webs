@@ -24,7 +24,7 @@ from contextlib import asynccontextmanager
 
 @asynccontextmanager
 async def lifespan(app):
-    """Start background room-cleanup task on startup; cancel on shutdown."""
+    """Start background tasks on startup; cancel on shutdown."""
     async def _cleanup_loop():
         while True:
             await asyncio.sleep(10 * 60)  # Run every 10 minutes
@@ -33,13 +33,43 @@ async def lifespan(app):
             except Exception as e:
                 print(f"[Cleanup] Error during cleanup: {e}")
 
-    task = asyncio.create_task(_cleanup_loop())
+    async def _grace_period_loop():
+        """Auto-tally scores when the 10-second grace period expires."""
+        while True:
+            await asyncio.sleep(1)
+            try:
+                now = datetime.now()
+                for room_id, room in list(room_manager.rooms.items()):
+                    if (room.status == GameStatus.GRACE_PERIOD
+                            and room.grace_period_end
+                            and now >= room.grace_period_end):
+                        winner_id = room_manager.tally_scores(room_id)
+                        room = room_manager.get_room(room_id)
+                        if room and winner_id:
+                            await room_manager.broadcast_to_room(room_id, {
+                                "type": "game_ended",
+                                "data": {
+                                    "winner_id": winner_id,
+                                    "winner_username": next(
+                                        (p.username for p in room.players if p.player_id == winner_id),
+                                        "Unknown"
+                                    ),
+                                    "room": room.model_dump(mode='json')
+                                }
+                            })
+            except Exception as e:
+                print(f"[GracePeriod] Error: {e}")
+
+    cleanup_task = asyncio.create_task(_cleanup_loop())
+    grace_task = asyncio.create_task(_grace_period_loop())
     yield
-    task.cancel()
-    try:
-        await task
-    except asyncio.CancelledError:
-        pass
+    cleanup_task.cancel()
+    grace_task.cancel()
+    for t in (cleanup_task, grace_task):
+        try:
+            await t
+        except asyncio.CancelledError:
+            pass
 
 # Initialize FastAPI app
 app = FastAPI(title="Cambio Card Game API", lifespan=lifespan)
@@ -67,7 +97,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Serve static files (bridge.js, etc.)
 # Serve static files (bridge.js, etc.)
 base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 frontend_dir = os.path.join(base_dir, "Frontend")
@@ -158,10 +187,6 @@ class CreateRoomRequest(BaseModel):
 
 class JoinRoomRequest(BaseModel):
     username: str
-
-class WebSocketMessage(BaseModel):
-    type: str  # join, play_card, draw_card, reveal_card, game_state_request
-    data: Optional[Dict] = None
 
 def get_card_value(card: Card, red_king_variant: bool = False) -> int:
     """Return the scoring value for a card according to Cambio rules."""
@@ -410,7 +435,7 @@ class GameRoomManager:
         for room_id, reason in to_delete:
             # Notify connected players before closing
             reason_messages = {
-                "inactivity": "Room closed due to 30 minutes of inactivity. The game state has been cleared.",
+                "inactivity": "Room closed due to inactivity. The game state has been cleared.",
                 "empty_lobby": "Lobby closed — no players were connected for 30 minutes.",
                 "game_finished": "Room closed after game ended.",
             }
@@ -630,19 +655,14 @@ class GameRoomManager:
             return True
 
         if ability == "blind_swap":
-            # New Universal Logic: Can swap ANY two cards (source and target)
-            # The payload should now contain source/target player/card indices.
-            # For backward compatibility or simplicity, we check if new format is used.
-            # If "own_card_index" is present, it's the old format (Self <-> Other).
-            # But the user specifically requested "any two cards".
-            # Let's support a generalized format: "source" and "target" dicts.
-            
+            # Generalized format: source and target player/card indices.
+            # Falls back to own_card_index for backward compatibility.
             source_pid = payload.get("source_player_id")
             source_idx = payload.get("source_card_index")
             target_pid = payload.get("target_player_id")
             target_idx = payload.get("target_card_index")
             
-            # Fallback for old frontend logic if not updated yet (though we will update frontend)
+            # Fallback for old frontend format
             if source_pid is None:
                 source_pid = acting_player.player_id
                 source_idx = payload.get("own_card_index")
@@ -983,9 +1003,6 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
                      continue
 
                 if player.pending_drawn_card:
-                    # If you have a drawn card pending, you might still be able to eliminate other cards from your hand?
-                    # The rules say "Eliminations can happen at any point".
-                    # But it might complicate the UI/state. Let's allow it for now.
                     pass
                 
                 # Check if player has the card (and it's not None)
@@ -1022,12 +1039,7 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
                 # Sacrifice rule: card must match the top of the discard pile
                 top_discard = room.game_state.discard_pile[-1] if room.game_state.discard_pile else None
                 if top_discard and played_card.rank != top_discard.rank:
-                    # Wrong guess - punishment: draw a card face down
-                    # In this version, we will enforce it ends the turn if it WAS your turn?
-                    # Or just penalty card. Rules say "Becareful not to incur the penalty".
-                    # Usually penalty = draw card. Turn continuation depends on house rules.
-                    # Given "Eliminations can happen at any point", it probably shouldn't end turn unless it was your turn action.
-                    # But play_card is NOT the turn action (Draw is). So we just give penalty.
+                    # Wrong guess - penalty: draw a penalty card
                     
                     if not room.game_state.deck:
                         if len(room.game_state.discard_pile) <= 1:
@@ -1159,7 +1171,7 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
                 player.last_draw_source = "deck"
                 player.last_drawn_card = drawn_card
                 
-                # Do NOT add to hand or move to next turn yet
+                # Card is held as pending until player resolves it (swap or discard)
                 
                 # Send card to player so they can decide
                 await websocket.send_json({
@@ -1288,10 +1300,6 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
                     # Check for ability
                     ability_name = get_card_ability(card)
                     if ability_name:
-                         # Check if player is "immune" because they called Cambio?
-                         # "The person who called Canbio... is immune to any abilities."
-                         # But this is the active player using their own ability.
-                         
                          player.pending_ability = ability_name
                          # Send ability opportunity
                          await websocket.send_json({
@@ -1372,10 +1380,6 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
                     if p1 and p2:
                         idx1 = targets["first_card_index"]
                         idx2 = targets["second_card_index"]
-                        # Validate indices again just in case
-                        # Also check for None (though user might have swapped empty slots? Rules usually forbid swapping empty slots.
-                        # But if we use None for holes, we probably shouldn't allow selecting holes.
-                        # Let's ensure slots are not None.
                         if (0 <= idx1 < len(p1.hand) and p1.hand[idx1] is not None and 
                             0 <= idx2 < len(p2.hand) and p2.hand[idx2] is not None):
                             
@@ -1425,7 +1429,6 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
                     continue
                 
                 player.pending_ability = None
-                # End turn
                 cambio_winner = room_manager.next_turn(room_id)
                 room = room_manager.get_room(room_id)
                 await room_manager.broadcast_to_room(room_id, {
@@ -1645,35 +1648,22 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
                     continue
 
                 removed_card = target_player.hand[target_index]
-                target_player.hand[target_index] = None # Create hole
+                target_player.hand[target_index] = None
                 room.game_state.discard_pile.append(removed_card)
                 
                 msg_extra = ""
                 if target_id != player_id:
-                     # Move replacement card
-                     # Wait, if we use None for holes, popping changes indices. We should set to None.
-                     # But rule says: "I give them one of my cards, and that card goes to that bottom left position".
-                     # So target slot gets filled. My slot becomes None (or shifted?).
-                     # User said: "If I get rid of the top right card, there should just be a hole there". 
-                     # But for swapping replacement: "I give them one of my cards, and that card goes to that bottom left position".
-                     # This implies target hole is filled immediately.
-                     # But my card leaves a hole in MY hand?
-                     # "If I get rid of the top right card... hole there". This context was elimination without replacement (self elimination or just hole logic).
-                     # Let's assume replacement fills the hole. And the GIVER gets a hole.
-                     
-                     if player.hand[replacement_index] is None:
-                         await websocket.send_json({"type": "error", "message": "Cannot replace with an empty slot"})
-                         continue
+                    if player.hand[replacement_index] is None:
+                        await websocket.send_json({"type": "error", "message": "Cannot replace with an empty slot"})
+                        continue
 
-                     replacement_card = player.hand[replacement_index]
-                     player.hand[replacement_index] = None # Giver gets a hole
-                     target_player.hand[target_index] = replacement_card # Target hole filled
-                     
-                     msg_extra = " and gave them a replacement card"
+                    replacement_card = player.hand[replacement_index]
+                    player.hand[replacement_index] = None
+                    target_player.hand[target_index] = replacement_card
+
+                    msg_extra = " and gave them a replacement card"
                 
                 room = room_manager.get_room(room_id)
-
-                # Eliminations don't end your turn - you can do as many as you want
                 await room_manager.broadcast_to_room(room_id, {
                     "type": "card_eliminated",
                     "data": {
@@ -1782,11 +1772,6 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
                     p.pending_drawn_card = None
                     p.pending_ability = None
                     p.pending_swap_targets = None
-                    # Optional: Reset score if it's a new game? Or keep for session?
-                    # "bring us back to the start lobby" sounds like a full reset.
-                    # But often friends play multiple rounds. Let's keep scores for now? 
-                    # User: "shows the players".
-                    # Let's NOT reset scores so they can see who is winning overall.
                 
                 # Broadcast reset
                 await room_manager.broadcast_to_room(room_id, {
