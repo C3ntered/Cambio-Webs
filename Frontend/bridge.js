@@ -273,50 +273,12 @@ function handleSocketMessage(event) {
 
             renderBoard(message.data.room, playerContext.playerId);
             
-            // Highlight swapped cards
+            // Highlight swapped cards (if applicable)
             const { player1_id, card1_index, player2_id, card2_index } = message.data;
-            if (player1_id !== undefined && card1_index !== undefined && 
+            if (player1_id !== undefined && card1_index !== undefined &&
                 player2_id !== undefined && card2_index !== undefined) {
-                
-                const highlight = (pid, idx) => {
-                     // Need to find the button element in the DOM.
-                     // The renderBoard function rebuilds the DOM, so we must find elements in the *new* DOM.
-                     // We added 'data-index' attribute to buttons in renderBoard to help with this.
-                     let btn = null;
-                     if (pid === playerContext.playerId) {
-                         const container = document.getElementById('card-container');
-                         if (container) {
-                             const buttons = Array.from(container.children);
-                             btn = buttons.find(b => parseInt(b.getAttribute('data-index')) === idx);
-                         }
-                     } else {
-                        const oppContainer = document.getElementById('opponents-container');
-                        if (oppContainer) {
-                            // Find the opponent's container
-                            // Note: renderBoard iterates players to build this.
-                            // We need to find the correct .opponent-hand div.
-                            const allPlayers = latestRoomState.players;
-                            const opponents = allPlayers.filter(p => p.player_id !== playerContext.playerId);
-                            const oppIndex = opponents.findIndex(p => p.player_id === pid);
-                            
-                            if (oppIndex !== -1 && oppContainer.children[oppIndex]) {
-                                const cardsDiv = oppContainer.children[oppIndex].querySelector('.opponent-cards');
-                                if (cardsDiv) {
-                                     const buttons = Array.from(cardsDiv.children);
-                                     btn = buttons.find(b => parseInt(b.getAttribute('data-index')) === idx);
-                                }
-                            }
-                        }
-                     }
-                     
-                     if (btn) {
-                         btn.classList.add('swapped-highlight');
-                         setTimeout(() => btn.classList.remove('swapped-highlight'), 3000);
-                     }
-                };
-                
-                highlight(player1_id, card1_index);
-                highlight(player2_id, card2_index);
+                highlightCard(player1_id, card1_index);
+                highlightCard(player2_id, card2_index);
             }
             break;
         }
@@ -359,16 +321,8 @@ function handleSocketMessage(event) {
                 renderBoard(latestRoomState, playerContext.playerId);
 
                 // Highlight swapped cards
-                const highlight = (pid, idx) => {
-                     const btn = findCardElement(pid, idx, latestRoomState, playerContext.playerId);
-                     if (btn) {
-                         btn.classList.add('swapped-highlight');
-                         setTimeout(() => btn.classList.remove('swapped-highlight'), 3000);
-                     }
-                };
-
-                if (player1_id !== undefined && card1_index !== undefined) highlight(player1_id, card1_index);
-                if (player2_id !== undefined && card2_index !== undefined) highlight(player2_id, card2_index);
+                if (player1_id !== undefined && card1_index !== undefined) highlightCard(player1_id, card1_index);
+                if (player2_id !== undefined && card2_index !== undefined) highlightCard(player2_id, card2_index);
             };
 
             if (player1_id !== undefined && card1_index !== undefined && player2_id !== undefined && card2_index !== undefined) {
@@ -1462,6 +1416,15 @@ window.startGame = startGame;
 window.playAgain = playAgain;
 window.skipAbility = skipAbility;
 window.toggleAdminMode = toggleAdminMode;
+
+function highlightCard(pid, idx, duration = 3000) {
+    const btn = findCardElement(pid, idx, latestRoomState, playerContext.playerId);
+    if (btn) {
+        btn.classList.add('swapped-highlight');
+        setTimeout(() => btn.classList.remove('swapped-highlight'), duration);
+    }
+}
+
 
 function findCardElement(pid, idx, roomState, myPlayerId) {
     console.log('findCardElement called:', pid, idx, myPlayerId);
