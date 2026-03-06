@@ -1079,9 +1079,6 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
                     })
                      continue
 
-                if player.pending_drawn_card:
-                    pass
-                
                 # Check if player has the card (and it's not None)
                 card_found = False
                 played_card = None
