@@ -232,11 +232,13 @@
             grid-template-rows: repeat(2, 140px);
             grid-auto-columns: 100px;
             grid-auto-flow: column;
-            gap: 4px;
+            gap: 12px;
             justify-content: center;
         }
         .opponent-cards button:hover:not(:disabled) {
-             transform: scale(1.05);
+            background-color: #f5f5f5 !important;
+            transform: translateY(-2px);
+            transition: transform 0.2s;
         }
         
         #play-area {
@@ -763,6 +765,8 @@
         font-weight: bold !important;
         position: relative !important;
         background-color: white;
+        cursor: pointer !important;
+        transition: transform 0.2s !important;
     }
     
     /* Ensure Turn Indicator is visible */
