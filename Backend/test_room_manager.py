@@ -63,3 +63,38 @@ def test_deck_no_adjustment_if_already_two():
     manager.start_game(room.room_id)
     assert room.num_decks == 2
     assert len(room.game_state.deck) == (2 * 54) - (2 * 4) - 1
+
+@pytest.mark.asyncio
+async def test_handle_wrong_guess_penalty():
+    from unittest.mock import AsyncMock, MagicMock
+    manager = GameRoomManager()
+    room_id = "test_room"
+    player_id = "test_player"
+    player = Player(player_id=player_id, username="TestUser", hand=[Card(suit="Hearts", rank="Ace")])
+    room = Room(
+        room_id=room_id,
+        players=[player],
+        game_state=GameState(deck=[Card(suit="Spades", rank="3")]),
+        status=GameStatus.PLAYING,
+        created_at=MagicMock()
+    )
+    manager.rooms[room_id] = room
+    mock_ws = AsyncMock()
+    manager.broadcast_to_room = AsyncMock()
+    manager.end_turn = AsyncMock()
+
+    # Test without end_turn
+    success = await manager.handle_wrong_guess_penalty(
+        room_id, player, mock_ws, "Private", "Broadcast", end_turn=False
+    )
+    assert success is True
+    assert len(player.hand) == 2
+    manager.end_turn.assert_not_called()
+
+    # Test with end_turn
+    player.hand = [Card(suit="Hearts", rank="Ace")] # reset hand
+    success = await manager.handle_wrong_guess_penalty(
+        room_id, player, mock_ws, "Private", "Broadcast", end_turn=True
+    )
+    assert success is True
+    manager.end_turn.assert_called_once_with(room_id, check_win=True)

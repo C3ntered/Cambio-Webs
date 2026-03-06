@@ -810,6 +810,37 @@ class GameRoomManager:
         player.hand.append(drawn_card)
         return True
 
+    async def handle_wrong_guess_penalty(self, room_id: str, player: Player, websocket: WebSocket, private_message: str, broadcast_message: str, end_turn: bool = False) -> bool:
+        """Handle a wrong guess/sacrifice penalty: draw a card, notify, and optionally end turn."""
+        ok = await self.apply_penalty_draw(room_id, player, websocket)
+        if ok:
+            player.last_draw_source = None
+            player.last_drawn_card = None
+            room = self.get_room(room_id)
+            if not room:
+                return False
+
+            await websocket.send_json({
+                "type": "wrong_sacrifice_penalty",
+                "data": {
+                    "message": private_message,
+                    "room": room.model_dump(mode='json')
+                }
+            })
+            await self.broadcast_to_room(room_id, {
+                "type": "player_penalty_draw",
+                "data": {
+                    "player_id": player.player_id,
+                    "message": broadcast_message,
+                    "room": room.model_dump(mode='json')
+                }
+            }, exclude_player=player.player_id)
+
+            if end_turn:
+                await self.end_turn(room_id, check_win=True)
+            return True
+        return False
+
 
     async def broadcast_grace_period_started(self, room_id: str, message: str = "Grace Period started!"):
         """Broadcast grace_period_started to all players in a room."""
@@ -1117,24 +1148,12 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
                 top_discard = room.game_state.discard_pile[-1] if room.game_state.discard_pile else None
                 if top_discard and played_card.rank != top_discard.rank:
                     # Wrong guess - penalty: draw a penalty card
-                    ok = await room_manager.apply_penalty_draw(room_id, player, websocket)
-                    if ok:
-                        room = room_manager.get_room(room_id)
-                        await websocket.send_json({
-                            "type": "wrong_sacrifice_penalty",
-                            "data": {
-                                "message": "Wrong card! That doesn't match the discard. You drew a penalty card.",
-                                "room": room.model_dump(mode='json')
-                            }
-                        })
-                        await room_manager.broadcast_to_room(room_id, {
-                            "type": "player_penalty_draw",
-                            "data": {
-                                "player_id": player_id,
-                                "message": f"{player.username} played the wrong card and drew a penalty!",
-                                "room": room.model_dump(mode='json')
-                            }
-                        }, exclude_player=player_id)
+                    await room_manager.handle_wrong_guess_penalty(
+                        room_id, player, websocket,
+                        private_message="Wrong card! That doesn't match the discard. You drew a penalty card.",
+                        broadcast_message=f"{player.username} played the wrong card and drew a penalty!",
+                        end_turn=False
+                    )
                     continue
 
                 # Card matches - remove from hand (set to None) and add to discard
@@ -1574,27 +1593,12 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
 
                 if target_card.rank != top_card.rank:
                     # Wrong guess - penalty: draw a card and end turn
-                    ok = await room_manager.apply_penalty_draw(room_id, player, websocket)
-                    if ok:
-                        player.last_draw_source = None
-                        player.last_drawn_card = None
-                        room = room_manager.get_room(room_id)
-                        await websocket.send_json({
-                            "type": "wrong_sacrifice_penalty",
-                            "data": {
-                                "message": "Wrong guess! That card doesn't match the discard. You drew a penalty card.",
-                                "room": room.model_dump(mode='json')
-                            }
-                        })
-                        await room_manager.broadcast_to_room(room_id, {
-                            "type": "player_penalty_draw",
-                            "data": {
-                                "player_id": player_id,
-                                "message": f"{player.username} guessed wrong and drew a penalty!",
-                                "room": room.model_dump(mode='json')
-                            }
-                        }, exclude_player=player_id)
-                        await room_manager.end_turn(room_id, check_win=True)
+                    await room_manager.handle_wrong_guess_penalty(
+                        room_id, player, websocket,
+                        private_message="Wrong guess! That card doesn't match the discard. You drew a penalty card.",
+                        broadcast_message=f"{player.username} guessed wrong and drew a penalty!",
+                        end_turn=True
+                    )
                     continue
 
                 removed_card = target_player.hand[target_index]
