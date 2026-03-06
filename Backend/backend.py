@@ -605,7 +605,7 @@ class GameRoomManager:
                     "card": card.model_dump(mode='json'),
                     "target_player_id": acting_player.player_id,
                     "card_index": index,
-                    "duration": 3000
+                    "duration": 5000
                 }
             })
 
@@ -616,7 +616,7 @@ class GameRoomManager:
                     "player_id": acting_player.player_id,
                     "target_player_id": acting_player.player_id,
                     "card_index": index,
-                    "duration": 3000
+                    "duration": 5000
                 }
             })
             return True
@@ -639,7 +639,7 @@ class GameRoomManager:
                     "card": card.model_dump(mode='json'),
                     "target_player_id": target_id,
                     "card_index": index,
-                    "duration": 3000
+                    "duration": 5000
                 }
             })
 
@@ -650,7 +650,7 @@ class GameRoomManager:
                     "player_id": acting_player.player_id,
                     "target_player_id": target_id,
                     "card_index": index,
-                    "duration": 3000
+                    "duration": 5000
                 }
             })
             return True
@@ -753,6 +753,7 @@ class GameRoomManager:
                     "ability": "look_and_swap",
                     "first": {"player_id": first_player.player_id, "card_index": first_idx, "card": first_card.model_dump(mode='json')},
                     "second": {"player_id": second_player.player_id, "card_index": second_idx, "card": second_card.model_dump(mode='json')},
+                    "duration": 5000,
                     "message": "Review the cards. Do you want to swap them?"
                 }
             })
@@ -1626,37 +1627,47 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
                 })
 
             elif msg_type == "reveal_card":
-                # Reveal a card to other players (memory aspect of Cambio)
+                # Temporarily reveal card to requesting player (5 seconds)
+                # Note: 'reveal_card' is now private as per Cambio rules for memorization
                 card_data = message.get("data", {}).get("card")
-                if not card_data:
+                card_index = message.get("data", {}).get("card_index")
+
+                if not card_data and card_index is None:
                     await websocket.send_json({
                         "type": "error",
-                        "message": "Card data required"
+                        "message": "Card data or card_index required"
                     })
                     continue
                 
-                card = Card(**card_data)
+                # Find card in hand
+                target_card = None
+                if card_index is not None:
+                    if 0 <= card_index < len(player.hand):
+                        target_card = player.hand[card_index]
+                elif card_data:
+                    card = Card(**card_data)
+                    for i, c in enumerate(player.hand):
+                        if c and c.suit == card.suit and c.rank == card.rank:
+                            target_card = c
+                            card_index = i
+                            break
                 
-                # Check if player has the card
-                if not any(c and c.suit == card.suit and c.rank == card.rank for c in player.hand):
+                if not target_card:
                     await websocket.send_json({
                         "type": "error",
                         "message": "Card not in hand"
                     })
                     continue
                 
-                # Add to revealed cards
-                if player_id not in room.game_state.revealed_cards:
-                    room.game_state.revealed_cards[player_id] = []
-                room.game_state.revealed_cards[player_id].append(card)
-                
-                # Broadcast to all players
-                await room_manager.broadcast_to_room(room_id, {
-                    "type": "card_revealed",
+                # Send private reveal to player only (5 seconds)
+                await room_manager.send_to_player(room_id, player_id, {
+                    "type": "ability_resolution",
                     "data": {
-                        "player_id": player_id,
-                        "card": card.model_dump(mode='json'),
-                        "room": room.model_dump(mode='json')
+                        "ability": "reveal_card",
+                        "card": target_card.model_dump(mode='json'),
+                        "target_player_id": player_id,
+                        "card_index": card_index,
+                        "duration": 5000
                     }
                 })
             

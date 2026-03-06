@@ -45,6 +45,9 @@ const getApiBase = () => {
 
 const API_BASE = getApiBase();
 
+const REVEAL_DURATION = 5000;
+const VIEWING_DURATION = 5000;
+
 let socket = null;
 let playerContext = {
     username: null,
@@ -390,7 +393,7 @@ function handleSocketMessage(event) {
         case 'ability_resolution':
             console.log('ability_resolution received:', message.data);
             const { ability, card, card_index, target_player_id, duration, first, second } = message.data;
-            const dur = duration || 3000;
+            const dur = duration || REVEAL_DURATION;
 
             const animateReveal = (pid, idx, cardData) => {
                 const btn = findCardElement(pid, idx, latestRoomState, playerContext.playerId);
@@ -465,18 +468,29 @@ function handleSocketMessage(event) {
                 notify(`You peeked at ${targetName}'s card #${card_index + 1}: ${formatCard(card)}`, dur);
             } else if (ability === 'look_and_swap' && first && second) {
                 pendingSwapDecision = true;
-                // Add cards to activeLookIndicators with 'PERSIST' duration
-                if (!activeLookIndicators[first.player_id]) activeLookIndicators[first.player_id] = {};
-                activeLookIndicators[first.player_id][first.card_index] = 'PERSIST';
 
-                if (!activeLookIndicators[second.player_id]) activeLookIndicators[second.player_id] = {};
-                activeLookIndicators[second.player_id][second.card_index] = 'PERSIST';
+                // Use flip animation for both cards
+                if (latestRoomState) {
+                    renderBoard(latestRoomState, playerContext.playerId);
+                }
 
-                renderBoard(latestRoomState, playerContext.playerId);
+                setTimeout(() => {
+                    animateReveal(first.player_id, first.card_index, first.card);
+                    animateReveal(second.player_id, second.card_index, second.card);
+                }, 50);
 
                 const p1 = latestRoomState.players.find(p => p.player_id === first.player_id);
                 const p2 = latestRoomState.players.find(p => p.player_id === second.player_id);
                 notify(`Review cards: ${formatCard(first.card)} (${p1.username}) and ${formatCard(second.card)} (${p2.username})`, dur);
+            } else if (ability === 'reveal_card' && card) {
+                // Handle private reveal_card request
+                if (latestRoomState) {
+                    renderBoard(latestRoomState, playerContext.playerId);
+                }
+                setTimeout(() => {
+                    animateReveal(target_player_id, card_index, card);
+                }, 50);
+                notify(`You revealed your card #${card_index + 1}: ${formatCard(card)}`, dur);
             } else {
                 notify(`Ability result: ${JSON.stringify(message.data)}`);
             }
@@ -1023,7 +1037,7 @@ function renderBoard(room, yourPlayerId) {
                     if (marker.parentNode) marker.parentNode.removeChild(marker);
                     const ce = document.getElementById('viewing-countdown');
                     if (ce) ce.style.display = 'none';
-                }, 5000);
+                }, VIEWING_DURATION);
             }
 
             if (me) {
