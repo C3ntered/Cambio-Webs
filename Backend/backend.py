@@ -88,11 +88,18 @@ env_origins = os.environ.get("ALLOWED_ORIGINS", "")
 if env_origins:
     default_origins.extend([origin.strip() for origin in env_origins.split(",") if origin.strip()])
 
+# Security Fix: Credentials should not be used with wildcard origins.
+# If "*" is in the origins list, we must remove it if allow_credentials is True,
+# or Starlette/FastAPI will raise a RuntimeError at startup.
+allow_credentials = True
+if allow_credentials and "*" in default_origins:
+    default_origins = [o for o in default_origins if o != "*"]
+
 # CORS middleware for frontend connection
 app.add_middleware(
     CORSMiddleware,
     allow_origins=default_origins,  # In production, specify your frontend domain
-    allow_credentials=True,
+    allow_credentials=allow_credentials,
     allow_methods=["*"],
     allow_headers=["*"],
 )
