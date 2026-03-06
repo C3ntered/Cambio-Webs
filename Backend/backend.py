@@ -191,14 +191,16 @@ class JoinRoomRequest(BaseModel):
 # Constants for card deck creation
 SUITS = ("Hearts", "Diamonds", "Clubs", "Spades")
 RANKS = ("Ace", "2", "3", "4", "5", "6", "7", "8", "9", "10", "Jack", "Queen", "King")
+NUMERIC_RANKS = {str(n) for n in range(2, 11)}
+FACE_RANKS = {"Jack", "Queen", "King"}
 
 def get_card_value(card: Card, red_king_variant: bool = False) -> int:
     """Return the scoring value for a card according to Cambio rules."""
     if card.rank == "Ace":
         return 1
-    if card.rank in [str(n) for n in range(2, 11)]:
+    if card.rank in NUMERIC_RANKS:
         return int(card.rank)
-    if card.rank in ["Jack", "Queen", "King"]:
+    if card.rank in FACE_RANKS:
         # Red kings count as -1 (or -2 if variant active), black kings count as 10
         if card.rank == "King" and card.suit in {"Hearts", "Diamonds"}:
             return -2 if red_king_variant else -1
