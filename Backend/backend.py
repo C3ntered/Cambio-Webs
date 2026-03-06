@@ -12,7 +12,11 @@ from typing import List, Dict, Optional, Set
 from datetime import datetime, timedelta
 import uuid
 import random
+import secrets
 import json
+
+# Instantiate a cryptographically secure random number generator (CSPRNG)
+secure_random = secrets.SystemRandom()
 import os
 import asyncio
 from enum import Enum
@@ -311,7 +315,7 @@ class GameRoomManager:
         
         # Create and shuffle deck(s)
         deck = self.create_deck(room.num_decks)
-        random.shuffle(deck)
+        secure_random.shuffle(deck)
         room.game_state.deck = deck
         
         # Deal cards to players (4 cards for Cambio base rules)
@@ -342,7 +346,7 @@ class GameRoomManager:
         if not starter_id:
             # First round or winner left -> Random player
             if room.players:
-                starter_id = random.choice(room.players).player_id
+                starter_id = secure_random.choice(room.players).player_id
         
         room.game_state.current_turn = starter_id
         room.game_state.turn_number = 1
@@ -383,7 +387,7 @@ class GameRoomManager:
         room.game_state.discard_pile = [last_card]
         
         # Shuffle the cards and make them the new deck
-        random.shuffle(cards_to_reshuffle)
+        secure_random.shuffle(cards_to_reshuffle)
         room.game_state.deck = cards_to_reshuffle
     
     def get_room(self, room_id: str) -> Optional[Room]:
