@@ -1541,30 +1541,31 @@ function animateSwap(player1_id, card1_index, player2_id, card2_index, callback)
     el1.style.visibility = 'hidden';
     el2.style.visibility = 'hidden';
 
-    // Force layout
-    void clone1.offsetHeight;
-
-    // Animate
+    // Animate using nested requestAnimationFrame to avoid forced synchronous layout
+    // while ensuring the browser registers the initial position for the transition.
     requestAnimationFrame(() => {
-        clone1.style.top = rect2.top + 'px';
-        clone1.style.left = rect2.left + 'px';
+        requestAnimationFrame(() => {
+            clone1.style.top = rect2.top + 'px';
+            clone1.style.left = rect2.left + 'px';
 
-        clone2.style.top = rect1.top + 'px';
-        clone2.style.left = rect1.left + 'px';
+            clone2.style.top = rect1.top + 'px';
+            clone2.style.left = rect1.left + 'px';
+
+            // Wait for transition to complete
+            setTimeout(() => {
+                if (clone1.parentNode) document.body.removeChild(clone1);
+                if (clone2.parentNode) document.body.removeChild(clone2);
+
+                // Restore visibility of original elements
+                el1.style.visibility = 'visible';
+                el2.style.visibility = 'visible';
+
+                isAnimating = false;
+                console.log('Animation finished, calling callback');
+                if (callback) callback();
+            }, 700);
+        });
     });
-
-    setTimeout(() => {
-        if (clone1.parentNode) document.body.removeChild(clone1);
-        if (clone2.parentNode) document.body.removeChild(clone2);
-        
-        // Restore visibility of original elements
-        el1.style.visibility = 'visible';
-        el2.style.visibility = 'visible';
-
-        isAnimating = false;
-        console.log('Animation finished, calling callback');
-        if (callback) callback();
-    }, 700);
 }
 
 function applyIndicators() {
