@@ -98,6 +98,9 @@ allow_credentials = True
 if allow_credentials and "*" in default_origins:
     default_origins = [o for o in default_origins if o != "*"]
 
+if not default_origins:
+    default_origins = ["https://cambio-webs.onrender.com"]
+
 # CORS middleware for frontend connection
 app.add_middleware(
     CORSMiddleware,
