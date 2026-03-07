@@ -755,9 +755,12 @@ function renderBoard(room, yourPlayerId) {
             item.style.margin = '5px 0';
             item.style.backgroundColor = player.player_id === yourPlayerId ? '#e3f2fd' : '#f5f5f5';
             item.style.borderRadius = '4px';
-            item.innerText = player.username + (player.player_id === yourPlayerId ? ' (You)' : '');
+            item.textContent = player.username + (player.player_id === yourPlayerId ? ' (You)' : '');
             if (player.is_connected) {
-                item.innerHTML += ' <span style="color: green;">●</span>';
+                const statusDot = document.createElement('span');
+                statusDot.style.color = 'green';
+                statusDot.textContent = ' ●';
+                item.appendChild(statusDot);
             }
             list.appendChild(item);
         });
