@@ -613,17 +613,26 @@ class GameRoomManager:
         if not room:
             return None
 
-        # Calculate scores
+        # Calculate scores and card counts in a single pass
+        player_stats = []
         for player in room.players:
-            player.score = sum(get_card_value(card, room.red_king_variant) for card in player.hand if card)
+            score = 0
+            count = 0
+            for card in player.hand:
+                if card:
+                    score += get_card_value(card, room.red_king_variant)
+                    count += 1
+            player.score = score
+            player_stats.append((player, score, count))
 
-        # Determine winner
-        sorted_players = sorted(
-            room.players,
-            key=lambda p: (p.score, len([c for c in p.hand if c]), 0 if p.player_id == room.game_state.cambio_caller else 1)
+        # Determine winner using pre-calculated values
+        # Tie-break priority: 1. Lower score, 2. Fewer cards, 3. Is Cambio caller
+        sorted_stats = sorted(
+            player_stats,
+            key=lambda x: (x[1], x[2], 0 if x[0].player_id == room.game_state.cambio_caller else 1)
         )
 
-        winner = sorted_players[0] if sorted_players else None
+        winner = sorted_stats[0][0] if sorted_stats else None
         winner_id = winner.player_id if winner else None
 
         if winner_id:
