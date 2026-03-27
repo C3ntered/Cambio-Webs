@@ -89,9 +89,14 @@ default_origins = [
     "https://cambiogame.com",
     "https://www.cambiogame.com",
     "https://cambio-webs.onrender.com",
-    "http://localhost:8000",
-    "http://127.0.0.1:8000",
 ]
+
+# Include local origins only if DEBUG is enabled
+if os.environ.get("DEBUG", "").lower() == "true":
+    default_origins.extend([
+        "http://localhost:8000",
+        "http://127.0.0.1:8000",
+    ])
 
 # Allow additional origins via environment variable
 env_origins = os.environ.get("ALLOWED_ORIGINS", "")
