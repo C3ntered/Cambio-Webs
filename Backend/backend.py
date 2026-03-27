@@ -6,7 +6,7 @@ By Kai Holland
 Last Edits: 3/10/2026
 """
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
@@ -132,19 +132,40 @@ if not os.path.exists(frontend_dir):
     # Fallback if running from a different context
     frontend_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "../Frontend")
 
+# Global cache for static files to improve performance and avoid blocking I/O
+_static_cache: Dict[str, bytes] = {}
+
+async def _get_cached_response(filepath: str, media_type: str) -> Optional[Response]:
+    """Retrieve file content from cache or read it non-blockingly."""
+    if filepath not in _static_cache:
+        # Use asyncio.to_thread to avoid blocking the event loop with disk I/O
+        exists = await asyncio.to_thread(os.path.exists, filepath)
+        if not exists:
+            return None
+
+        def _read_file():
+            with open(filepath, "rb") as f:
+                return f.read()
+
+        _static_cache[filepath] = await asyncio.to_thread(_read_file)
+
+    return Response(content=_static_cache[filepath], media_type=media_type)
+
 # Explicit route for rules.pdf to ensure it's served correctly
 @app.get("/static/rules.pdf")
 async def get_rules_pdf():
     pdf_path = os.path.join(frontend_dir, "rules.pdf")
-    if os.path.exists(pdf_path):
-        return FileResponse(pdf_path, media_type="application/pdf")
+    response = await _get_cached_response(pdf_path, "application/pdf")
+    if response:
+        return response
     return {"error": "File not found", "path": pdf_path}
 
 @app.get("/bridge.js")
 async def get_bridge_js():
     js_path = os.path.join(frontend_dir, "bridge.js")
-    if os.path.exists(js_path):
-        return FileResponse(js_path, media_type="application/javascript")
+    response = await _get_cached_response(js_path, "application/javascript")
+    if response:
+        return response
     return {"error": "File not found"}
 
 app.mount("/static", StaticFiles(directory=frontend_dir), name="static")
@@ -998,8 +1019,9 @@ async def root():
     Serve the main HTML file
     """
     html_path = os.path.join(frontend_dir, "index.html")
-    if os.path.exists(html_path):
-        return FileResponse(html_path)
+    response = await _get_cached_response(html_path, "text/html")
+    if response:
+        return response
     return {"message": "Cambio Card Game API", "status": "running", "note": f"index.html not found in {frontend_dir}"}
 
 @app.get("/instructions")
@@ -1008,8 +1030,9 @@ async def instructions():
     Serve the instructions HTML file
     """
     html_path = os.path.join(frontend_dir, "instructions.html")
-    if os.path.exists(html_path):
-        return FileResponse(html_path)
+    response = await _get_cached_response(html_path, "text/html")
+    if response:
+        return response
     return {"message": "Instructions not found", "status": "running"}
 
 @app.post("/api/rooms", response_model=Room)
