@@ -83,6 +83,9 @@ async def lifespan(app):
 
 # Initialize FastAPI app
 app = FastAPI(title="Cambio Card Game API", lifespan=lifespan)
+"""
+The main FastAPI application instance for the Cambio Card Game backend.
+"""
 
 # Define allowed origins
 default_origins = [
