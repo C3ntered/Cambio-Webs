@@ -225,47 +225,78 @@ function handleSocketMessage(event) {
                 const resultsDiv = document.getElementById('game-over-results');
                 if (modal && resultsDiv) {
                     modal.style.display = 'flex';
+                    resultsDiv.innerHTML = ''; // Clear existing
 
-                    let html = `<p style="font-size:18px;">Winner: <strong>${escapeHTML(winnerName)}</strong></p>`;
-                    html += `<table class="score-table">
-                        <thead>
-                            <tr>
-                                <th>Player</th>
-                                <th>Score</th>
-                                <th>Cards</th>
-                            </tr>
-                        </thead>
-                        <tbody>`;
+                    const winnerPara = document.createElement('p');
+                    winnerPara.style.fontSize = '18px';
+                    winnerPara.appendChild(document.createTextNode('Winner: '));
+                    const winnerStrong = document.createElement('strong');
+                    winnerStrong.textContent = winnerName;
+                    winnerPara.appendChild(winnerStrong);
+                    resultsDiv.appendChild(winnerPara);
 
+                    const table = document.createElement('table');
+                    table.className = 'score-table';
+
+                    const thead = document.createElement('thead');
+                    const headerRow = document.createElement('tr');
+                    ['Player', 'Score', 'Cards'].forEach(text => {
+                        const th = document.createElement('th');
+                        th.textContent = text;
+                        headerRow.appendChild(th);
+                    });
+                    thead.appendChild(headerRow);
+                    table.appendChild(thead);
+
+                    const tbody = document.createElement('tbody');
                     // Sort players by score
                     const sortedPlayers = [...room.players].sort((a, b) => a.score - b.score);
 
                     sortedPlayers.forEach(p => {
                         const isWinner = p.player_id === winnerId;
-                        const rowClass = isWinner ? 'winner-row' : '';
+                        const tr = document.createElement('tr');
+                        if (isWinner) tr.className = 'winner-row';
 
-                        // Show cards in hand
-                        let cardsHtml = '<div style="display:flex; gap:5px; flex-wrap:wrap;">';
+                        // Username cell
+                        const nameTd = document.createElement('td');
+                        nameTd.textContent = p.username + (p.player_id === playerContext.playerId ? ' (You)' : '');
+                        tr.appendChild(nameTd);
+
+                        // Score cell
+                        const scoreTd = document.createElement('td');
+                        scoreTd.textContent = p.score;
+                        tr.appendChild(scoreTd);
+
+                        // Cards cell
+                        const cardsTd = document.createElement('td');
+                        const cardsDiv = document.createElement('div');
+                        cardsDiv.style.display = 'flex';
+                        cardsDiv.style.gap = '5px';
+                        cardsDiv.style.flexWrap = 'wrap';
+
                         p.hand.forEach(c => {
+                            const cardSpan = document.createElement('span');
+                            cardSpan.style.border = '1px solid #ccc';
+                            cardSpan.style.padding = '2px 4px';
+                            cardSpan.style.borderRadius = '4px';
                             if (c) {
-                                const color = getCardColor(c);
-                                const symbol = getSuitSymbol(c.suit);
-                                cardsHtml += `<span style="color:${color}; border:1px solid #ccc; padding:2px 4px; border-radius:4px; background:white;">${c.rank}${symbol}</span>`;
+                                cardSpan.style.color = getCardColor(c);
+                                cardSpan.style.background = 'white';
+                                cardSpan.textContent = c.rank + getSuitSymbol(c.suit);
                             } else {
-                                cardsHtml += `<span style="border:1px dashed #ccc; padding:2px 4px; border-radius:4px;">❌</span>`;
+                                cardSpan.style.borderStyle = 'dashed';
+                                cardSpan.textContent = '❌';
                             }
+                            cardsDiv.appendChild(cardSpan);
                         });
-                        cardsHtml += '</div>';
+                        cardsTd.appendChild(cardsDiv);
+                        tr.appendChild(cardsTd);
 
-                        html += `<tr class="${rowClass}">
-                            <td>${escapeHTML(p.username)}${p.player_id === playerContext.playerId ? ' (You)' : ''}</td>
-                            <td>${p.score}</td>
-                            <td>${cardsHtml}</td>
-                        </tr>`;
+                        tbody.appendChild(tr);
                     });
 
-                    html += `</tbody></table>`;
-                    resultsDiv.innerHTML = html;
+                    table.appendChild(tbody);
+                    resultsDiv.appendChild(table);
                 }
             }
 
@@ -919,10 +950,20 @@ function renderBoard(room, yourPlayerId) {
                 if (nameDisplay) nameDisplay.innerText = "Swap Decision";
                 if (desc) desc.innerText = "Do you want to swap the cards you just saw?";
                 if (controls) {
-                    controls.innerHTML = `
-                        <button onclick="resolveSwapDecision(true)" style="background-color: #4CAF50; margin-right: 10px;">Swap</button>
-                        <button onclick="resolveSwapDecision(false)" style="background-color: #f44336;">Keep</button>
-                    `;
+                    controls.innerHTML = '';
+                    const swapBtn = document.createElement('button');
+                    swapBtn.textContent = 'Swap';
+                    swapBtn.style.backgroundColor = '#4CAF50';
+                    swapBtn.style.marginRight = '10px';
+                    swapBtn.addEventListener('click', () => resolveSwapDecision(true));
+
+                    const keepBtn = document.createElement('button');
+                    keepBtn.textContent = 'Keep';
+                    keepBtn.style.backgroundColor = '#f44336';
+                    keepBtn.addEventListener('click', () => resolveSwapDecision(false));
+
+                    controls.appendChild(swapBtn);
+                    controls.appendChild(keepBtn);
                 }
                 // Hide Skip Ability button during decision if possible, or repurpose it?
                 // The main skip button is outside controls div in HTML. We might want to hide it.
