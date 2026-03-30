@@ -133,11 +133,12 @@ if not os.path.exists(frontend_dir):
     frontend_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "../Frontend")
 
 # Global cache for static files to improve performance and avoid blocking I/O
-_static_cache: Dict[str, bytes] = {}
+_static_cache: Dict[tuple[str, str], Response] = {}
 
 async def _get_cached_response(filepath: str, media_type: str) -> Optional[Response]:
     """Retrieve file content from cache or read it non-blockingly."""
-    if filepath not in _static_cache:
+    cache_key = (filepath, media_type)
+    if cache_key not in _static_cache:
         # Use asyncio.to_thread to avoid blocking the event loop with disk I/O
         exists = await asyncio.to_thread(os.path.exists, filepath)
         if not exists:
@@ -147,9 +148,10 @@ async def _get_cached_response(filepath: str, media_type: str) -> Optional[Respo
             with open(filepath, "rb") as f:
                 return f.read()
 
-        _static_cache[filepath] = await asyncio.to_thread(_read_file)
+        content = await asyncio.to_thread(_read_file)
+        _static_cache[cache_key] = Response(content=content, media_type=media_type)
 
-    return Response(content=_static_cache[filepath], media_type=media_type)
+    return _static_cache[cache_key]
 
 # Explicit route for rules.pdf to ensure it's served correctly
 @app.get("/static/rules.pdf")
