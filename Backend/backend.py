@@ -1509,12 +1509,10 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
                 resolved = await room_manager.resolve_card_ability(room, player, ability_name, payload)
                 if resolved:
                     # If the ability moved us to a decision state (like 'swap_decision'), do NOT end turn yet
-                    if player.pending_ability == "swap_decision":
-                        # Wait for next message 'resolve_swap_decision'
-                        pass
-                    else:
+                    if player.pending_ability != "swap_decision":
                         player.pending_ability = None
                         await room_manager.end_turn(room_id)
+                    # If it IS 'swap_decision', wait for next message 'resolve_swap_decision'
                 else:
                     await websocket.send_json({"type": "error", "message": "Invalid ability usage"})
 
