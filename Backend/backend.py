@@ -106,12 +106,9 @@ env_origins = os.environ.get("ALLOWED_ORIGINS", "")
 if env_origins:
     default_origins.extend([origin.strip() for origin in env_origins.split(",") if origin.strip()])
 
-# Security Fix: Credentials should not be used with wildcard origins.
-# If "*" is in the origins list, we must remove it if allow_credentials is True,
-# or Starlette/FastAPI will raise a RuntimeError at startup.
+# Security Fix: Starlette/FastAPI raises RuntimeError if "*" is in origins when allow_credentials is True.
 allow_credentials = True
-if allow_credentials and "*" in default_origins:
-    default_origins = [o for o in default_origins if o != "*"]
+default_origins = [o for o in default_origins if o != "*"]
 
 if not default_origins:
     default_origins = ["https://cambio-webs.onrender.com"]
