@@ -30,7 +30,7 @@ const getApiBase = () => {
     // PRODUCTION: If on cambiogame.com, use Render backend
     if (window.location.hostname === 'cambiogame.com' ||
         window.location.hostname === 'www.cambiogame.com') {
-        return '157.151.195.248';
+        return 'https://cambiogame.com';
     }
 
     // LOCAL DEVELOPMENT: If running on port 8080, point to backend on 8000
