@@ -8,6 +8,23 @@
     <meta content="width=device-width, initial-scale=1.0" name="viewport" />
     <title>Cambio Card Game</title>
     <style>
+        :root {
+            --player-card-width: 100px;
+            --player-card-height: 140px;
+            --player-card-gap: 12px;
+            --player-corner-size: 20px;
+            --player-center-size: 48px;
+            --opponent-card-width: 100px;
+            --opponent-card-height: 140px;
+            --opponent-card-gap: 4px;
+            --opponent-corner-size: 20px;
+            --opponent-center-size: 48px;
+            --pile-card-width: 100px;
+            --pile-card-height: 140px;
+            --pile-corner-size: 20px;
+            --pile-center-size: 48px;
+        }
+
         body {
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
             margin: 0;
@@ -101,13 +118,7 @@
             display: flex;
             flex-direction: column;
             gap: 20px;
-
-            /* Zoom out 15% */
-            zoom: 0.70;
-            -moz-transform: scale(0.85);
-            -moz-transform-origin: top center;
-            /* Compensate width for Firefox transform scaling */
-            /* Note: This is an approximation as transform doesn't reflow the container width */
+            min-height: 100vh;
         }
 
         #room-info {
@@ -252,10 +263,10 @@
 
         .opponent-cards {
             display: grid;
-            grid-template-rows: repeat(2, 140px);
-            grid-auto-columns: 100px;
+            grid-template-rows: repeat(2, var(--opponent-card-height));
+            grid-auto-columns: var(--opponent-card-width);
             grid-auto-flow: column;
-            gap: 4px;
+            gap: var(--opponent-card-gap);
             justify-content: center;
         }
 
@@ -324,10 +335,10 @@
 
         #card-container {
             display: grid;
-            grid-template-rows: repeat(2, 140px);
-            grid-auto-columns: 100px;
+            grid-template-rows: repeat(2, var(--player-card-height));
+            grid-auto-columns: var(--player-card-width);
             grid-auto-flow: column;
-            gap: 12px;
+            gap: var(--player-card-gap);
             margin-top: 20px;
             justify-content: center;
         }
@@ -339,9 +350,10 @@
             border-radius: 8px;
             background-color: white;
             cursor: pointer;
-            min-height: 140px;
-            min-width: 100px;
-            width: 100%;
+            min-height: var(--player-card-height);
+            min-width: var(--player-card-width);
+            width: var(--player-card-width);
+            height: var(--player-card-height);
             box-sizing: border-box;
             display: flex;
             flex-direction: column;
@@ -350,6 +362,9 @@
             font-weight: bold;
             box-shadow: 2px 2px 5px rgba(0, 0, 0, 0.2);
             position: relative;
+            --corner-size: var(--player-corner-size);
+            --center-size: var(--player-center-size);
+            --back-icon-size: calc(var(--player-center-size) * 0.84);
         }
 
         #card-container button:hover {
@@ -364,11 +379,11 @@
             flex-direction: column;
             align-items: center;
             line-height: 1;
-            font-size: 20px;
+            font-size: var(--corner-size, 20px);
         }
 
         .card-center {
-            font-size: 48px;
+            font-size: var(--center-size, 48px);
             line-height: 1;
         }
 
@@ -379,7 +394,7 @@
             align-items: center;
             line-height: 1;
             transform: rotate(180deg);
-            font-size: 20px;
+            font-size: var(--corner-size, 20px);
         }
 
         .card-red {
@@ -410,7 +425,7 @@
         .card-back::after {
             content: "🂠";
             color: white;
-            font-size: 40px;
+            font-size: var(--back-icon-size, 40px);
             text-shadow: 1px 1px 2px rgba(0, 0, 0, 0.5);
         }
 
@@ -576,10 +591,8 @@
             border-radius: 8px;
             background-color: white;
             cursor: pointer;
-            width: 100px;
-            /* Unified width */
-            height: 140px;
-            /* Unified height */
+            width: var(--card-width, var(--pile-card-width));
+            height: var(--card-height, var(--pile-card-height));
             box-sizing: border-box;
             display: flex;
             flex-direction: column;
@@ -588,6 +601,9 @@
             font-weight: bold;
             box-shadow: 2px 2px 5px rgba(0, 0, 0, 0.2);
             position: relative;
+            --corner-size: var(--pile-corner-size);
+            --center-size: var(--pile-center-size);
+            --back-icon-size: calc(var(--pile-center-size) * 0.84);
         }
 
         .game-card:hover {
@@ -842,8 +858,8 @@
 
         /* Fix Peek Visuals: Add padding to opponent cards and match player cards exactly */
         .opponent-cards button {
-            width: 100px !important;
-            height: 140px !important;
+            width: var(--opponent-card-width) !important;
+            height: var(--opponent-card-height) !important;
             padding: 5px !important;
             /* Match .game-card padding */
             border: 2px solid #333 !important;
@@ -858,6 +874,9 @@
             font-weight: bold !important;
             position: relative !important;
             background-color: white;
+            --corner-size: var(--opponent-corner-size);
+            --center-size: var(--opponent-center-size);
+            --back-icon-size: calc(var(--opponent-center-size) * 0.84);
         }
 
         /* Ensure Turn Indicator is visible */
@@ -886,7 +905,7 @@
         .opponent-cards button.card-back::after {
             content: "🂠";
             color: white;
-            font-size: 40px;
+            font-size: var(--back-icon-size, 40px);
             text-shadow: 1px 1px 2px rgba(0, 0, 0, 0.5);
             display: block;
         }
@@ -897,6 +916,298 @@
 
         .opponent-cards button.card-black {
             color: #212121 !important;
+        }
+
+        .pile-card,
+        #deck-card {
+            --card-width: var(--pile-card-width);
+            --card-height: var(--pile-card-height);
+            --corner-size: var(--pile-corner-size);
+            --center-size: var(--pile-center-size);
+            --back-icon-size: calc(var(--pile-center-size) * 0.84);
+        }
+
+        #top-card {
+            min-height: var(--pile-card-height);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        #center-piles {
+            display: flex;
+            gap: 20px;
+            align-items: center;
+            justify-content: center;
+            flex-wrap: wrap;
+        }
+
+        @media (max-width: 768px) {
+            :root {
+                --player-card-width: 52px;
+                --player-card-height: 76px;
+                --player-card-gap: 6px;
+                --player-corner-size: 11px;
+                --player-center-size: 24px;
+                --opponent-card-width: 24px;
+                --opponent-card-height: 34px;
+                --opponent-card-gap: 2px;
+                --opponent-corner-size: 7px;
+                --opponent-center-size: 14px;
+                --pile-card-width: 56px;
+                --pile-card-height: 80px;
+                --pile-corner-size: 11px;
+                --pile-center-size: 26px;
+            }
+
+            body.in-game {
+                overflow: hidden;
+            }
+
+            #game-board {
+                max-width: none;
+                min-height: 100dvh;
+                height: 100dvh;
+                padding: 8px;
+                gap: 10px;
+            }
+
+            #game-container {
+                min-height: 100%;
+                height: 100%;
+                gap: 8px;
+                overflow: hidden;
+            }
+
+            #sidebar {
+                gap: 8px;
+                padding-bottom: 0;
+            }
+
+            #room-info {
+                padding: 8px 10px;
+                gap: 8px;
+                flex-wrap: wrap;
+            }
+
+            .room-meta {
+                display: flex;
+                flex-wrap: wrap;
+                gap: 6px 10px;
+                align-items: center;
+            }
+
+            .room-share-hint {
+                font-size: 12px !important;
+                margin-left: 0 !important;
+            }
+
+            #copy-room-id {
+                padding: 6px 10px;
+                font-size: 12px;
+            }
+
+            #player-list {
+                padding: 8px 10px;
+            }
+
+            #player-list h3 {
+                font-size: 14px;
+            }
+
+            #player-list ul {
+                gap: 6px;
+            }
+
+            #player-list li {
+                padding: 4px 10px;
+                font-size: 12px;
+            }
+
+            #start-game-btn {
+                padding: 12px 18px;
+                font-size: 18px;
+            }
+
+            #main-content {
+                min-height: 0;
+                overflow: hidden;
+            }
+
+            .game-area {
+                min-height: 0;
+                height: 100%;
+                display: grid;
+                grid-template-rows: minmax(0, 1fr) auto auto;
+                gap: 10px;
+                padding: 0;
+            }
+
+            #opponents-hands {
+                margin-bottom: 0;
+                min-height: 0;
+                padding: 0;
+                background: radial-gradient(circle at center, rgba(255, 255, 255, 0.14), rgba(0, 0, 0, 0.08));
+                overflow: hidden;
+            }
+
+            #opponents-hands h3 {
+                display: none;
+            }
+
+            #opponents-container {
+                width: 100%;
+                height: 100%;
+                min-height: 0;
+                padding: 4px 0 0;
+                position: relative;
+                justify-content: unset;
+                align-content: stretch;
+                overflow: hidden;
+            }
+
+            #opponents-container[data-layout="table"] {
+                display: block;
+            }
+
+            #opponents-container[data-layout="table"] .opponent-hand {
+                position: absolute;
+                width: min(30vw, 118px);
+                margin: 0;
+                padding: 6px 4px;
+                gap: 4px;
+            }
+
+            #opponents-container[data-layout="grid"] {
+                display: grid;
+                grid-template-columns: repeat(3, minmax(0, 1fr));
+                gap: 6px;
+                align-content: start;
+            }
+
+            #opponents-container[data-layout="grid"] .opponent-hand {
+                width: auto;
+                margin: 0;
+                padding: 6px 4px;
+            }
+
+            .seat-top-left {
+                top: 6px;
+                left: 0;
+            }
+
+            .seat-top-center {
+                top: 0;
+                left: 50%;
+                transform: translateX(-50%);
+            }
+
+            .seat-top-right {
+                top: 6px;
+                right: 0;
+            }
+
+            .seat-left-middle {
+                top: 40%;
+                left: 0;
+                transform: translateY(-50%);
+            }
+
+            .seat-right-middle {
+                top: 40%;
+                right: 0;
+                transform: translateY(-50%);
+            }
+
+            .opponent-hand {
+                background: rgba(255, 255, 255, 0.86);
+                backdrop-filter: blur(4px);
+            }
+
+            .opponent-name {
+                margin-bottom: 4px;
+                font-size: 11px;
+            }
+
+            #play-area {
+                gap: 8px;
+                padding: 0;
+            }
+
+            #turn-indicator {
+                margin: 0 auto;
+                padding: 8px 12px;
+                font-size: 14px;
+            }
+
+            #center-piles {
+                display: grid;
+                grid-template-columns: repeat(2, auto);
+                gap: 10px 12px;
+            }
+
+            #cambio-container {
+                grid-column: 1 / -1;
+            }
+
+            #discard-pile,
+            #deck-pile {
+                padding: 10px 8px;
+            }
+
+            #discard-pile h3,
+            #deck-pile h3 {
+                margin: 0 0 8px;
+                font-size: 13px;
+            }
+
+            #call-cambio-btn {
+                padding: 14px 18px;
+                font-size: 16px;
+            }
+
+            #my-hand {
+                padding: 10px 8px 12px;
+            }
+
+            #my-hand h3 {
+                margin-bottom: 8px;
+            }
+
+            #viewing-countdown {
+                font-size: 36px !important;
+            }
+
+            #draw-choice-panel,
+            #ability-panel {
+                margin: 10px 0;
+                padding: 10px;
+            }
+
+            .action-buttons {
+                margin: 10px 0;
+                gap: 8px;
+                flex-wrap: wrap;
+            }
+
+            .action-buttons button,
+            #draw-choice-panel button,
+            #ability-panel button {
+                padding: 10px 14px;
+                font-size: 14px;
+            }
+
+            #card-container {
+                margin-top: 10px;
+            }
+
+            #notifications {
+                left: 8px;
+                right: 8px;
+                bottom: 8px;
+                width: auto;
+                max-height: 35dvh;
+            }
         }
     </style>
 </head>
@@ -938,9 +1249,9 @@
         <div id="game-container">
             <div id="sidebar">
                 <div id="room-info">
-                    <div>
+                    <div class="room-meta">
                         <strong>Room ID:</strong> <span id="room-id-display">-</span>
-                        <span style="margin-left: 15px; font-size: 14px;">Share this ID with other players to join your
+                        <span class="room-share-hint" style="margin-left: 15px; font-size: 14px;">Share this ID with other players to join your
                             game</span>
                     </div>
                     <button id="copy-room-id" onclick="copyRoomId()">Copy Room ID</button>
@@ -962,8 +1273,7 @@
                     </div>
                     <div id="play-area" style="flex-direction: column; gap: 10px;">
                         <h2 id="turn-indicator">Waiting for players...</h2>
-                        <div id="center-piles"
-                            style="display:flex; gap:20px; align-items:center; justify-content:center; flex-wrap:wrap;">
+                        <div id="center-piles">
                             <div id="discard-pile">
                                 <h3>Discard Pile</h3>
                                 <div id="top-card"></div>

@@ -747,6 +747,19 @@ function getVisualOrder(totalCards) {
     return indices;
 }
 
+function getOpponentSeatClass(totalOpponents, opponentIndex) {
+    const layouts = {
+        1: ['seat-top-center'],
+        2: ['seat-top-left', 'seat-top-right'],
+        3: ['seat-top-left', 'seat-top-center', 'seat-top-right'],
+        4: ['seat-top-left', 'seat-top-right', 'seat-left-middle', 'seat-right-middle'],
+        5: ['seat-top-left', 'seat-top-center', 'seat-top-right', 'seat-left-middle', 'seat-right-middle']
+    };
+
+    const layout = layouts[totalOpponents];
+    return layout ? layout[opponentIndex] || null : null;
+}
+
 function renderBoard(room, yourPlayerId) {
     if (isAnimating) {
         console.log('Skipping render due to animation');
@@ -763,6 +776,7 @@ function renderBoard(room, yourPlayerId) {
         lobby.style.display = 'none';
         board.style.display = 'block';
         if (title) title.style.display = 'none';
+        document.body.classList.add('in-game');
     }
 
     // Update room ID display
@@ -1003,24 +1017,8 @@ function renderBoard(room, yourPlayerId) {
             topCardContainer.innerHTML = '';
             const topCard = room.game_state.discard_pile.slice(-1)[0];
             if (topCard) {
-                // Reuse button style for consistency
                 const cardDiv = document.createElement('div');
-                cardDiv.className = 'card-display'; // Not defined in CSS, but we can inline or rely on existing
-                // Mimic card button style
-                cardDiv.style.border = "2px solid #333";
-                cardDiv.style.borderRadius = "8px";
-                cardDiv.style.backgroundColor = "white";
-                cardDiv.style.width = "100px";
-                cardDiv.style.height = "140px";
-                cardDiv.style.display = "flex";
-                cardDiv.style.flexDirection = "column";
-                cardDiv.style.justifyContent = "space-between";
-                cardDiv.style.alignItems = "center";
-                cardDiv.style.padding = "5px";
-                cardDiv.style.fontWeight = "bold";
-                cardDiv.style.margin = "0 auto";
-                cardDiv.style.position = "relative";
-                cardDiv.style.boxShadow = "2px 2px 5px rgba(0,0,0,0.2)";
+                cardDiv.className = 'game-card pile-card';
 
                 renderCardContent(cardDiv, topCard);
                 topCardContainer.appendChild(cardDiv);
@@ -1154,12 +1152,16 @@ function renderBoard(room, yourPlayerId) {
         const opponentsContainer = document.getElementById('opponents-container');
         if (opponentsContainer && !isViewingPhase) {
             opponentsContainer.innerHTML = '';
+            const opponents = room.players.filter(player => player.player_id !== yourPlayerId);
+            opponentsContainer.dataset.layout = opponents.length <= 5 ? 'table' : 'grid';
             const mustResolveDraw = !!pendingDrawnCard;
-            room.players.forEach(player => {
-                if (player.player_id === yourPlayerId) return; // Skip self
-
+            opponents.forEach((player, opponentIndex) => {
                 const section = document.createElement('div');
                 section.className = 'opponent-hand';
+                const seatClass = getOpponentSeatClass(opponents.length, opponentIndex);
+                if (seatClass) {
+                    section.classList.add(seatClass);
+                }
                 const nameEl = document.createElement('div');
                 nameEl.className = 'opponent-name';
                 nameEl.innerText = player.username + (player.is_connected ? ' ●' : '');
