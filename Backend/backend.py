@@ -106,12 +106,9 @@ env_origins = os.environ.get("ALLOWED_ORIGINS", "")
 if env_origins:
     default_origins.extend([origin.strip() for origin in env_origins.split(",") if origin.strip()])
 
-# Security Fix: Credentials should not be used with wildcard origins.
-# If "*" is in the origins list, we must remove it if allow_credentials is True,
-# or Starlette/FastAPI will raise a RuntimeError at startup.
+# Security Fix: Starlette/FastAPI raises RuntimeError if "*" is in origins when allow_credentials is True.
 allow_credentials = True
-if allow_credentials and "*" in default_origins:
-    default_origins = [o for o in default_origins if o != "*"]
+default_origins = [o for o in default_origins if o != "*"]
 
 if not default_origins:
     default_origins = ["https://cambio-webs.onrender.com"]
@@ -133,11 +130,12 @@ if not os.path.exists(frontend_dir):
     frontend_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "../Frontend")
 
 # Global cache for static files to improve performance and avoid blocking I/O
-_static_cache: Dict[str, bytes] = {}
+_static_cache: Dict[tuple[str, str], Response] = {}
 
 async def _get_cached_response(filepath: str, media_type: str) -> Optional[Response]:
     """Retrieve file content from cache or read it non-blockingly."""
-    if filepath not in _static_cache:
+    cache_key = (filepath, media_type)
+    if cache_key not in _static_cache:
         # Use asyncio.to_thread to avoid blocking the event loop with disk I/O
         exists = await asyncio.to_thread(os.path.exists, filepath)
         if not exists:
@@ -147,9 +145,10 @@ async def _get_cached_response(filepath: str, media_type: str) -> Optional[Respo
             with open(filepath, "rb") as f:
                 return f.read()
 
-        _static_cache[filepath] = await asyncio.to_thread(_read_file)
+        content = await asyncio.to_thread(_read_file)
+        _static_cache[cache_key] = Response(content=content, media_type=media_type)
 
-    return Response(content=_static_cache[filepath], media_type=media_type)
+    return _static_cache[cache_key]
 
 # Explicit route for rules.pdf to ensure it's served correctly
 @app.get("/static/rules.pdf")
@@ -1402,6 +1401,13 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
                 if player.pending_drawn_card:
                     await websocket.send_json({"type": "error", "message": "Resolve your drawn card first"})
                     continue
+
+                if player.pending_ability:
+                    await websocket.send_json({
+                        "type": "error",
+                        "message": "You must use or skip your pending ability first"
+                    })
+                    continue
                 
                 if not room.game_state.discard_pile:
                     await websocket.send_json({"type": "error", "message": "Discard pile is empty"})
@@ -1509,12 +1515,10 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
                 resolved = await room_manager.resolve_card_ability(room, player, ability_name, payload)
                 if resolved:
                     # If the ability moved us to a decision state (like 'swap_decision'), do NOT end turn yet
-                    if player.pending_ability == "swap_decision":
-                        # Wait for next message 'resolve_swap_decision'
-                        pass
-                    else:
+                    if player.pending_ability != "swap_decision":
                         player.pending_ability = None
                         await room_manager.end_turn(room_id)
+                    # If it IS 'swap_decision', wait for next message 'resolve_swap_decision'
                 else:
                     await websocket.send_json({"type": "error", "message": "Invalid ability usage"})
 

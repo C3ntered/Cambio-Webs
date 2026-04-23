@@ -647,6 +647,48 @@ function sendMessage(type, data = {}) {
   socket.send(JSON.stringify({ type, data }));
 }
 
+function getCurrentPlayerState(room = latestRoomState) {
+    if (!room || !playerContext.playerId) return null;
+    return room.players.find(p => p.player_id === playerContext.playerId) || null;
+}
+
+function isMyTurn(room = latestRoomState) {
+    return !!room &&
+        room.status?.toLowerCase() === GAME_STATUS.PLAYING &&
+        room.game_state?.current_turn === playerContext.playerId;
+}
+
+function hasPendingDraw(room = latestRoomState) {
+    const me = getCurrentPlayerState(room);
+    return !!pendingDrawnCard || !!me?.pending_drawn_card;
+}
+
+function hasBlockedTurnInteraction(room = latestRoomState) {
+    const me = getCurrentPlayerState(room);
+    return !!pendingAbility ||
+        !!me?.pending_ability ||
+        selectingTargets ||
+        pendingSwapDecision ||
+        !!eliminationTarget;
+}
+
+function canDrawFromDeck(room = latestRoomState) {
+    return isMyTurn(room) && !hasPendingDraw(room) && !hasBlockedTurnInteraction(room);
+}
+
+function canUseDiscardPile(room = latestRoomState) {
+    if (!isMyTurn(room) || hasBlockedTurnInteraction(room)) {
+        return false;
+    }
+
+    const me = getCurrentPlayerState(room);
+    if (hasPendingDraw(room)) {
+        return me?.last_draw_source === 'deck';
+    }
+
+    return !!room?.game_state?.discard_pile?.length;
+}
+
 function drawCard() {
   sendMessage("draw_card");
 }
@@ -852,6 +894,19 @@ function getVisualOrder(totalCards) {
   // 6 cards (half=3): i=0 -> push(0), push(3). i=1 -> push(1), push(4). i=2 -> push(2), push(5). Result: [0, 3, 1, 4, 2, 5]. Correct.
 
   return indices;
+}
+
+function getOpponentSeatClass(totalOpponents, opponentIndex) {
+    const layouts = {
+        1: ['seat-top-center'],
+        2: ['seat-top-left', 'seat-top-right'],
+        3: ['seat-top-left', 'seat-top-center', 'seat-top-right'],
+        4: ['seat-top-left', 'seat-top-right', 'seat-left-middle', 'seat-right-middle'],
+        5: ['seat-top-left', 'seat-top-center', 'seat-top-right', 'seat-left-middle', 'seat-right-middle']
+    };
+
+    const layout = layouts[totalOpponents];
+    return layout ? layout[opponentIndex] || null : null;
 }
 
 function renderBoard(room, yourPlayerId) {
