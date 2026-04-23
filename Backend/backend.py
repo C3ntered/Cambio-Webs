@@ -1401,6 +1401,13 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
                 if player.pending_drawn_card:
                     await websocket.send_json({"type": "error", "message": "Resolve your drawn card first"})
                     continue
+
+                if player.pending_ability:
+                    await websocket.send_json({
+                        "type": "error",
+                        "message": "You must use or skip your pending ability first"
+                    })
+                    continue
                 
                 if not room.game_state.discard_pile:
                     await websocket.send_json({"type": "error", "message": "Discard pile is empty"})

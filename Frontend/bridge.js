@@ -551,6 +551,48 @@ function sendMessage(type, data = {}) {
     socket.send(JSON.stringify({ type, data }));
 }
 
+function getCurrentPlayerState(room = latestRoomState) {
+    if (!room || !playerContext.playerId) return null;
+    return room.players.find(p => p.player_id === playerContext.playerId) || null;
+}
+
+function isMyTurn(room = latestRoomState) {
+    return !!room &&
+        room.status?.toLowerCase() === GAME_STATUS.PLAYING &&
+        room.game_state?.current_turn === playerContext.playerId;
+}
+
+function hasPendingDraw(room = latestRoomState) {
+    const me = getCurrentPlayerState(room);
+    return !!pendingDrawnCard || !!me?.pending_drawn_card;
+}
+
+function hasBlockedTurnInteraction(room = latestRoomState) {
+    const me = getCurrentPlayerState(room);
+    return !!pendingAbility ||
+        !!me?.pending_ability ||
+        selectingTargets ||
+        pendingSwapDecision ||
+        !!eliminationTarget;
+}
+
+function canDrawFromDeck(room = latestRoomState) {
+    return isMyTurn(room) && !hasPendingDraw(room) && !hasBlockedTurnInteraction(room);
+}
+
+function canUseDiscardPile(room = latestRoomState) {
+    if (!isMyTurn(room) || hasBlockedTurnInteraction(room)) {
+        return false;
+    }
+
+    const me = getCurrentPlayerState(room);
+    if (hasPendingDraw(room)) {
+        return me?.last_draw_source === 'deck';
+    }
+
+    return !!room?.game_state?.discard_pile?.length;
+}
+
 function drawCard() {
     sendMessage('draw_card');
 }
@@ -1012,6 +1054,29 @@ function renderBoard(room, yourPlayerId) {
             }
         }
 
+        if (deckPileContainer) {
+            const canDrawDeck = canDrawFromDeck(room);
+            deckPileContainer.style.opacity = canDrawDeck ? '1' : '0.65';
+            deckPileContainer.style.cursor = canDrawDeck ? 'pointer' : 'not-allowed';
+            deckPileContainer.title = canDrawDeck ? 'Draw from deck' : 'Finish your current action before drawing from the deck';
+        }
+
+        if (discardPileContainer) {
+            const canUseDiscard = canUseDiscardPile(room);
+            const me = getCurrentPlayerState(room);
+            discardPileContainer.style.opacity = canUseDiscard ? '1' : '0.65';
+            discardPileContainer.style.cursor = canUseDiscard ? 'pointer' : 'not-allowed';
+            if (hasBlockedTurnInteraction(room)) {
+                discardPileContainer.title = 'Finish your current ability or action first';
+            } else if (hasPendingDraw(room) && me?.last_draw_source !== 'deck') {
+                discardPileContainer.title = 'You must swap after drawing from the discard pile';
+            } else if (!isMyTurn(room)) {
+                discardPileContainer.title = 'Wait for your turn';
+            } else {
+                discardPileContainer.title = hasPendingDraw(room) ? 'Discard your drawn card' : 'Draw from discard pile';
+            }
+        }
+
         const topCardContainer = document.getElementById('top-card');
         if (topCardContainer) {
             topCardContainer.innerHTML = '';
@@ -1241,26 +1306,45 @@ function renderBoard(room, yourPlayerId) {
     const deckPile = document.getElementById('deck-pile');
     if (deckPile) {
         deckPile.onclick = () => {
+            if (!canDrawFromDeck()) {
+                if (hasBlockedTurnInteraction()) {
+                    notify('Finish your current ability or action first.');
+                } else if (hasPendingDraw()) {
+                    notify('Resolve your drawn card first.');
+                } else {
+                    notify('Wait for your turn to draw.');
+                }
+                return;
+            }
             drawCard();
         };
     }
     const discardPile = document.getElementById('discard-pile');
     if (discardPile) {
         discardPile.onclick = () => {
-            if (latestRoomState) {
-                const me = latestRoomState.players.find(p => p.player_id === playerContext.playerId);
-                if (me && me.pending_drawn_card) {
-                    if (me.last_draw_source === 'deck') {
-                        resolveDraw('discard');
-                    } else {
-                        alert("You must swap when drawing from discard pile");
-                    }
+            if (!canUseDiscardPile()) {
+                const me = getCurrentPlayerState();
+                if (hasBlockedTurnInteraction()) {
+                    notify('Finish your current ability or action first.');
+                } else if (hasPendingDraw() && me?.last_draw_source === 'discard') {
+                    alert("You must swap when drawing from discard pile");
+                } else if (hasPendingDraw()) {
+                    notify('Resolve your drawn card first.');
                 } else {
-                    drawFromDiscard();
+                    notify('Wait for your turn to use the discard pile.');
                 }
-            } else {
-                drawFromDiscard();
+                return;
             }
+
+            if (latestRoomState) {
+                const me = getCurrentPlayerState(latestRoomState);
+                if (me && me.pending_drawn_card) {
+                    resolveDraw('discard');
+                    return;
+                }
+            }
+
+            drawFromDiscard();
         };
     }
 
