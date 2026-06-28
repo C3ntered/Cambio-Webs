@@ -9,20 +9,20 @@
     <title>Cambio Card Game</title>
     <style>
         :root {
-            --player-card-width: 100px;
-            --player-card-height: 140px;
+            --player-card-width: 118px;
+            --player-card-height: 166px;
             --player-card-gap: 12px;
-            --player-corner-size: 20px;
-            --player-center-size: 48px;
-            --opponent-card-width: 100px;
-            --opponent-card-height: 140px;
-            --opponent-card-gap: 4px;
-            --opponent-corner-size: 20px;
-            --opponent-center-size: 48px;
-            --pile-card-width: 100px;
-            --pile-card-height: 140px;
-            --pile-corner-size: 20px;
-            --pile-center-size: 48px;
+            --player-corner-size: 24px;
+            --player-center-size: 58px;
+            --opponent-card-width: 76px;
+            --opponent-card-height: 106px;
+            --opponent-card-gap: 6px;
+            --opponent-corner-size: 16px;
+            --opponent-center-size: 36px;
+            --pile-card-width: 110px;
+            --pile-card-height: 154px;
+            --pile-corner-size: 22px;
+            --pile-center-size: 52px;
         }
 
         body {
@@ -371,6 +371,25 @@
             background-color: #f5f5f5;
             transform: translateY(-2px);
             transition: transform 0.2s;
+        }
+
+        #draw-choice-panel {
+            text-align: center;
+        }
+
+        #drawn-card-display {
+            display: flex;
+            justify-content: center;
+            margin: 8px 0 10px;
+        }
+
+        .drawn-card-preview {
+            --card-width: var(--pile-card-width);
+            --card-height: var(--pile-card-height);
+            --corner-size: var(--pile-corner-size);
+            --center-size: var(--pile-center-size);
+            --back-icon-size: calc(var(--pile-center-size) * 0.84);
+            cursor: default;
         }
 
         .card-corner-top {
@@ -777,6 +796,63 @@
             color: #333;
         }
 
+        #action-feed {
+            background-color: rgba(255, 255, 255, 0.94);
+            color: #263238;
+            padding: 10px 20px;
+            border-radius: 4px;
+            width: 100%;
+            box-sizing: border-box;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+        }
+
+        #action-feed h3 {
+            margin: 0 0 8px;
+            font-size: 16px;
+            color: #263238;
+        }
+
+        #action-feed-list {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+            max-height: 120px;
+            overflow-y: auto;
+        }
+
+        .action-feed-empty,
+        .action-feed-item {
+            font-size: 13px;
+            line-height: 1.3;
+        }
+
+        .action-feed-empty {
+            color: #607d8b;
+            font-style: italic;
+        }
+
+        .action-feed-item {
+            border-left: 4px solid #4CAF50;
+            background: #f7fbf8;
+            padding: 7px 9px;
+            border-radius: 4px;
+        }
+
+        .action-feed-item.swap {
+            border-left-color: #ff9800;
+            background: #fff8e1;
+        }
+
+        .action-feed-item.draw {
+            border-left-color: #2196F3;
+            background: #e3f2fd;
+        }
+
+        .action-feed-item.alert {
+            border-left-color: #e53935;
+            background: #ffebee;
+        }
+
         #start-game-btn {
             background-color: #FF9800;
             color: white;
@@ -944,20 +1020,20 @@
 
         @media (max-width: 768px) {
             :root {
-                --player-card-width: 52px;
-                --player-card-height: 76px;
-                --player-card-gap: 6px;
-                --player-corner-size: 11px;
-                --player-center-size: 24px;
-                --opponent-card-width: 24px;
-                --opponent-card-height: 34px;
-                --opponent-card-gap: 2px;
-                --opponent-corner-size: 7px;
-                --opponent-center-size: 14px;
-                --pile-card-width: 56px;
-                --pile-card-height: 80px;
-                --pile-corner-size: 11px;
-                --pile-center-size: 26px;
+                --player-card-width: 70px;
+                --player-card-height: 98px;
+                --player-card-gap: 8px;
+                --player-corner-size: 14px;
+                --player-center-size: 32px;
+                --opponent-card-width: 42px;
+                --opponent-card-height: 60px;
+                --opponent-card-gap: 3px;
+                --opponent-corner-size: 9px;
+                --opponent-center-size: 18px;
+                --pile-card-width: 70px;
+                --pile-card-height: 98px;
+                --pile-corner-size: 14px;
+                --pile-center-size: 32px;
             }
 
             body.in-game {
@@ -1013,6 +1089,24 @@
 
             #player-list h3 {
                 font-size: 14px;
+            }
+
+            #action-feed {
+                padding: 8px 10px;
+            }
+
+            #action-feed h3 {
+                font-size: 14px;
+            }
+
+            #action-feed-list {
+                max-height: 72px;
+                gap: 4px;
+            }
+
+            .action-feed-empty,
+            .action-feed-item {
+                font-size: 12px;
             }
 
             #player-list ul {
@@ -1072,7 +1166,7 @@
 
             #opponents-container[data-layout="table"] .opponent-hand {
                 position: absolute;
-                width: min(30vw, 118px);
+                width: min(38vw, 148px);
                 margin: 0;
                 padding: 6px 4px;
                 gap: 4px;
@@ -1238,7 +1332,7 @@
             </label>
         </div>
         <button onclick="handleJoin()" style="margin-top:15px;">Join Game</button>
-        <a href="/rules.pdf"
+        <a href="/instructions"
             style="display:block; margin-top:10px; color:#4CAF50; text-decoration:none; font-weight:bold;"
             target="_blank">How to Play</a>
         <a class="coffee-button" href="https://buy.stripe.com/14A6oJ0KJcPg2nYb14dwc01" target="_blank">Buy me a coffee
@@ -1263,7 +1357,14 @@
                 </div>
                 <div id="player-list">
                     <h3>Players</h3>
-                </div><button id="start-game-btn" onclick="startGame()" style="display:none;">Start Game</button>
+                </div>
+                <div id="action-feed">
+                    <h3>Recent Actions</h3>
+                    <div id="action-feed-list">
+                        <div class="action-feed-empty">Actions will appear here during the game.</div>
+                    </div>
+                </div>
+                <button id="start-game-btn" onclick="startGame()" style="display:none;">Start Game</button>
             </div>
             <div id="main-content">
                 <div class="game-area">
@@ -1293,8 +1394,9 @@
                         </div>
                         <div id="draw-choice-panel"
                             style="display:none; padding: 15px; background: #fff3e0; border-radius: 8px; margin: 15px 0; border: 2px solid #ff9800; color: #333;">
-                            <p><strong>You drew:</strong> <span id="drawn-card-display"></span></p>
-                            <p>Swap with a hand card (any card), or discard to pile:</p>
+                            <p><strong>You drew:</strong></p>
+                            <div id="drawn-card-display"></div>
+                            <p id="draw-source-note">Click one of your hand cards to swap, or discard the drawn card.</p>
                             <button id="discard-drawn-btn" onclick="resolveDraw('discard')">Discard to pile</button>
                         </div>
                         <div id="ability-panel"

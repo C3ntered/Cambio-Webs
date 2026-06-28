@@ -62,6 +62,7 @@ let eliminationTarget = null; // Target for elimination (waiting for replacement
 let adminMode = false;
 let isAnimating = false;
 let activeLookIndicators = {}; // State of cards being looked at
+const actionHistory = [];
 
 async function joinGame(username, roomId = null) {
     if (!username) {
@@ -171,6 +172,7 @@ function handleSocketMessage(event) {
                 const name = p ? p.username : 'Unknown';
                 const card = message.data.card ? formatCard(message.data.card) : 'a card';
                 notify(`${name} played ${card}`);
+                recordAction(`${name} played ${card}`, 'alert');
             }
             latestRoomState = message.data.room;
             renderBoard(message.data.room, message.data.your_player_id || playerContext.playerId);
@@ -181,6 +183,7 @@ function handleSocketMessage(event) {
             if (message.data.player_id !== playerContext.playerId) {
                 notify(message.data.message || 'Action occurred');
             }
+            recordAction(message.data.message || 'A card action occurred', message.type === 'player_penalty_draw' ? 'alert' : 'swap');
             latestRoomState = message.data.room;
             renderBoard(message.data.room, message.data.your_player_id || playerContext.playerId);
             break;
@@ -191,6 +194,7 @@ function handleSocketMessage(event) {
                 const name = p ? p.username : 'Unknown';
                 const source = message.data.source === 'discard' ? 'discard pile' : 'deck';
                 notify(`${name} drew from ${source}`);
+                recordAction(`${name} drew from the ${source}`, 'draw');
             }
             latestRoomState = message.data.room;
             renderBoard(message.data.room, message.data.your_player_id || playerContext.playerId);
@@ -199,11 +203,13 @@ function handleSocketMessage(event) {
         case 'deck_reshuffled':
         case 'cambio_called':
             notify(message.data.message);
+            recordAction(message.data.message, message.type === 'cambio_called' ? 'alert' : 'draw');
             latestRoomState = message.data.room;
             renderBoard(message.data.room, message.data.your_player_id || playerContext.playerId);
             break;
         case 'grace_period_started':
             notify(message.data.message);
+            recordAction(message.data.message, 'alert');
             latestRoomState = message.data.room;
             renderBoard(message.data.room, message.data.your_player_id || playerContext.playerId);
             startGracePeriodCountdown(10);
@@ -329,6 +335,7 @@ function handleSocketMessage(event) {
         }
         case 'decision_notification':
             notify(message.data.message);
+            recordAction(message.data.message, 'swap');
         // Fall through
         case 'game_started':
         case 'round_started':
@@ -348,11 +355,13 @@ function handleSocketMessage(event) {
             latestRoomState = message.data.room;
             renderBoard(message.data.room, playerContext.playerId);
             notify(`Penalty: You drew a face-down penalty card.`);
+            recordAction(message.data.message || 'Penalty: drew a face-down penalty card', 'alert');
             break;
         case 'cards_swapped':
             console.log('cards_swapped message received', message.data);
             pendingDrawnCard = null; // Ensure draw state is cleared
             notify(message.data.message);
+            recordAction(message.data.message || 'Cards were swapped', 'swap');
 
             const { player1_id, card1_index, player2_id, card2_index } = message.data;
 
@@ -379,13 +388,16 @@ function handleSocketMessage(event) {
         case 'card_drawn':
             pendingDrawnCard = message.data.card;
             latestRoomState = message.data.room;
+            const drawSource = message.data.source === 'discard' ? 'discard pile' : 'deck';
             notify(`You drew ${formatCard(message.data.card)}. Choose: swap with a hand card or discard.`);
+            recordAction(`You drew ${formatCard(message.data.card)} from the ${drawSource}`, 'draw');
             renderBoard(message.data.room, playerContext.playerId);
             break;
         case 'ability_opportunity':
             pendingDrawnCard = null; // Clear drawn card state to hide draw panel
             pendingAbility = message.data.ability;
             notify(message.data.message);
+            recordAction(message.data.message, 'alert');
             latestRoomState = message.data.room;
             startAbilitySelection(pendingAbility);
             renderBoard(message.data.room, playerContext.playerId);
@@ -605,6 +617,9 @@ function resolveDraw(action, cardIndex) {
     const payload = { action };
     if (action === 'swap' && cardIndex !== undefined) {
         payload.card_index = cardIndex;
+    }
+    if (action === 'discard' && pendingDrawnCard) {
+        recordAction(`You discarded ${formatCard(pendingDrawnCard)}`, 'alert');
     }
     sendMessage('resolve_draw', payload);
 }
@@ -854,6 +869,7 @@ function renderBoard(room, yourPlayerId) {
         });
         playerListContainer.appendChild(list);
     }
+    renderActionFeed();
 
     // Show/hide Start Game button based on game status
     const startGameBtn = document.getElementById('start-game-btn');
@@ -952,12 +968,18 @@ function renderBoard(room, yourPlayerId) {
         // Draw choice panel - show when we have a pending drawn card
         const drawChoicePanel = document.getElementById('draw-choice-panel');
         const drawnCardDisplay = document.getElementById('drawn-card-display');
+        const drawSourceNote = document.getElementById('draw-source-note');
         const discardDrawnBtn = document.getElementById('discard-drawn-btn');
         const drawCardBtn = document.getElementById('draw-card-btn');
         if (drawChoicePanel && drawnCardDisplay) {
             if (pendingDrawnCard) {
                 drawChoicePanel.style.display = 'block';
-                drawnCardDisplay.textContent = formatCard(pendingDrawnCard);
+                drawnCardDisplay.innerHTML = '';
+                const drawnPreview = document.createElement('div');
+                drawnPreview.className = 'game-card drawn-card-preview';
+                drawnPreview.title = formatCard(pendingDrawnCard);
+                renderCardContent(drawnPreview, pendingDrawnCard);
+                drawnCardDisplay.appendChild(drawnPreview);
 
                 // If drawn from discard pile, you cannot discard it again
                 if (discardDrawnBtn) {
@@ -965,6 +987,9 @@ function renderBoard(room, yourPlayerId) {
                     const me = room.players.find(p => p.player_id === yourPlayerId);
                     if (me && me.last_draw_source === 'discard') {
                         discardDrawnBtn.style.display = 'none';
+                        if (drawSourceNote) {
+                            drawSourceNote.innerText = 'You drew from the discard pile. Click one of your hand cards to swap.';
+                        }
                         // Add note
                         let note = document.getElementById('swap-only-note');
                         if (!note) {
@@ -978,6 +1003,9 @@ function renderBoard(room, yourPlayerId) {
                         }
                     } else {
                         discardDrawnBtn.style.display = 'inline-block';
+                        if (drawSourceNote) {
+                            drawSourceNote.innerText = 'Click one of your hand cards to swap, or discard the drawn card.';
+                        }
                         const note = document.getElementById('swap-only-note');
                         if (note) note.style.display = 'none';
                     }
@@ -1417,6 +1445,41 @@ function renderCardContent(element, card) {
     bottomDiv.appendChild(bottomRank);
     bottomDiv.appendChild(bottomSymbol);
     element.appendChild(bottomDiv);
+}
+
+function recordAction(text, type = 'info') {
+    if (!text) return;
+    actionHistory.unshift({
+        text,
+        type,
+        at: new Date()
+    });
+    if (actionHistory.length > 8) actionHistory.pop();
+    renderActionFeed();
+}
+
+function renderActionFeed() {
+    const feed = document.getElementById('action-feed-list');
+    if (!feed) return;
+
+    feed.innerHTML = '';
+    if (!actionHistory.length) {
+        const empty = document.createElement('div');
+        empty.className = 'action-feed-empty';
+        empty.innerText = 'Actions will appear here during the game.';
+        feed.appendChild(empty);
+        return;
+    }
+
+    actionHistory.forEach(action => {
+        const item = document.createElement('div');
+        item.className = `action-feed-item ${action.type || 'info'}`;
+        const time = action.at instanceof Date
+            ? action.at.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+            : '';
+        item.innerText = time ? `${time} - ${action.text}` : action.text;
+        feed.appendChild(item);
+    });
 }
 
 function notify(text, duration = 3000) { // Set default duration to 3000ms
