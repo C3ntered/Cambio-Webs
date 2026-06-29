@@ -15,6 +15,7 @@ from typing import List, Dict, Optional
 from datetime import datetime, timedelta
 import uuid
 import secrets
+import string
 import json
 import os
 import asyncio
@@ -308,10 +309,33 @@ class GameRoomManager:
         """Initialize the GameRoomManager."""
         self.rooms: Dict[str, Room] = {}
         self.room_connections: Dict[str, Dict[str, WebSocket]] = {}  # room_id -> {player_id -> websocket}
+
+    def _normalize_room_id(self, room_id: str) -> str:
+        if not room_id:
+            return ""
+        return str(room_id).strip().upper()
+
+    def _resolve_room_id(self, room_id: str) -> Optional[str]:
+        normalized = self._normalize_room_id(room_id)
+        if not normalized:
+            return None
+        if normalized in self.rooms:
+            return normalized
+        for existing_id in self.rooms:
+            if self._normalize_room_id(existing_id) == normalized:
+                return existing_id
+        return normalized
+
+    def _generate_room_code(self) -> str:
+        alphabet = string.ascii_uppercase + string.digits
+        while True:
+            room_id = ''.join(secure_random.choice(alphabet) for _ in range(6))
+            if room_id not in self.rooms:
+                return room_id
     
     def create_room(self, username: str, max_players: int = 8, num_decks: Optional[int] = None, initial_hand_size: int = 4, red_king_variant: bool = False) -> Room:
         """Create a new game room"""
-        room_id = str(uuid.uuid4())[:8]
+        room_id = self._generate_room_code()
         player_id = str(uuid.uuid4())[:8]
         
         # Auto-calculate number of decks if not specified: 2 decks if max_players > 5
@@ -346,10 +370,30 @@ class GameRoomManager:
         """
         Join an existing room, returns (room, player_id)
         """
-        if room_id not in self.rooms:
+        resolved_room_id = self._resolve_room_id(room_id)
+        if not resolved_room_id or resolved_room_id not in self.rooms:
             raise HTTPException(status_code=404, detail="Room not found")
         
-        room = self.rooms[room_id]
+        room = self.rooms[resolved_room_id]
+        room.room_id = self._normalize_room_id(resolved_room_id)
+        
+        if room.status != GameStatus.WAITING:
+            raise HTTPException(status_code=400, detail="Game already started")
+        
+        if len(room.players) >= room.max_players:
+            raise HTTPException(status_code=400, detail="Room is full")
+        
+        player_id = str(uuid.uuid4())[:8]
+        player = Player(
+            player_id=player_id,
+            username=username,
+            is_connected=True
+        )
+        
+        room.players.append(player)
+        
+        # Removed auto-start - game must be manually started
+        return room, player_id
         
         if room.status != GameStatus.WAITING:
             raise HTTPException(status_code=400, detail="Game already started")
@@ -373,10 +417,11 @@ class GameRoomManager:
         """
         Start the game in a room
         """
-        if room_id not in self.rooms:
+        resolved_room_id = self._resolve_room_id(room_id)
+        if not resolved_room_id or resolved_room_id not in self.rooms:
             return
         
-        room = self.rooms[room_id]
+        room = self.rooms[resolved_room_id]
         if room.status != GameStatus.WAITING:
             return
         
@@ -453,10 +498,11 @@ class GameRoomManager:
         """
         Reshuffle the discard pile (except the last card) back into the deck
         """
-        if room_id not in self.rooms:
+        resolved_room_id = self._resolve_room_id(room_id)
+        if not resolved_room_id or resolved_room_id not in self.rooms:
             return
         
-        room = self.rooms[room_id]
+        room = self.rooms[resolved_room_id]
         
         if len(room.game_state.discard_pile) <= 1:
             # Not enough cards to reshuffle
@@ -479,28 +525,43 @@ class GameRoomManager:
         """
         Get room by ID
         """
-        return self.rooms.get(room_id)
+        resolved_room_id = self._resolve_room_id(room_id)
+        if not resolved_room_id:
+            return None
+        room = self.rooms.get(resolved_room_id)
+        if room:
+            room.room_id = self._normalize_room_id(resolved_room_id)
+        return room
     
     def add_connection(self, room_id: str, player_id: str, websocket: WebSocket):
         """
         Add WebSocket connection for a player
         """
-        if room_id not in self.room_connections:
-            self.room_connections[room_id] = {}
-        self.room_connections[room_id][player_id] = websocket
+        resolved_room_id = self._resolve_room_id(room_id)
+        if not resolved_room_id:
+            return
+        if resolved_room_id not in self.room_connections:
+            self.room_connections[resolved_room_id] = {}
+        self.room_connections[resolved_room_id][player_id] = websocket
     
     def remove_connection(self, room_id: str, player_id: str):
         """
         Remove WebSocket connection for a player
         """
-        if room_id in self.room_connections:
-            self.room_connections[room_id].pop(player_id, None)
+        resolved_room_id = self._resolve_room_id(room_id)
+        if not resolved_room_id:
+            return
+        if resolved_room_id in self.room_connections:
+            self.room_connections[resolved_room_id].pop(player_id, None)
 
     def touch_room(self, room_id: str):
         """
         Update last_activity timestamp for a room.
         """
-        room = self.rooms.get(room_id)
+        resolved_room_id = self._resolve_room_id(room_id)
+        if not resolved_room_id:
+            return
+        room = self.rooms.get(resolved_room_id)
         if room:
             room.last_activity = datetime.now()
 
@@ -555,10 +616,11 @@ class GameRoomManager:
         """
         Broadcast message to all players in a room
         """
-        if room_id not in self.room_connections:
+        resolved_room_id = self._resolve_room_id(room_id)
+        if not resolved_room_id or resolved_room_id not in self.room_connections:
             return
         
-        connections = self.room_connections[room_id]
+        connections = self.room_connections[resolved_room_id]
         
         async def send_to_player(player_id, websocket):
             try:
@@ -586,21 +648,23 @@ class GameRoomManager:
         """
         Send a private websocket message to a single player.
         """
-        websocket = self.room_connections.get(room_id, {}).get(player_id)
+        resolved_room_id = self._resolve_room_id(room_id)
+        websocket = self.room_connections.get(resolved_room_id, {}).get(player_id)
         if websocket:
             try:
                 await websocket.send_json(message)
             except Exception:
-                self.remove_connection(room_id, player_id)
+                self.remove_connection(resolved_room_id, player_id)
     
     def check_win_condition(self, room_id: str) -> Optional[str]:
         """
         Check if any player has won (empty hand, all None). Returns winner player_id or None
         """
-        if room_id not in self.rooms:
+        resolved_room_id = self._resolve_room_id(room_id)
+        if not resolved_room_id or resolved_room_id not in self.rooms:
             return None
         
-        room = self.rooms[room_id]
+        room = self.rooms[resolved_room_id]
         for player in room.players:
             # Check if all cards are None (eliminated)
             if not any(card for card in player.hand):
@@ -611,10 +675,11 @@ class GameRoomManager:
         """
         End the game and set winner
         """
-        if room_id not in self.rooms:
+        resolved_room_id = self._resolve_room_id(room_id)
+        if not resolved_room_id or resolved_room_id not in self.rooms:
             return
         
-        room = self.rooms[room_id]
+        room = self.rooms[resolved_room_id]
         room.status = GameStatus.FINISHED
         room.game_state.game_phase = "finished"
         
@@ -625,10 +690,11 @@ class GameRoomManager:
         """
         Transition room to grace period state
         """
-        if room_id not in self.rooms:
+        resolved_room_id = self._resolve_room_id(room_id)
+        if not resolved_room_id or resolved_room_id not in self.rooms:
             return
 
-        room = self.rooms[room_id]
+        room = self.rooms[resolved_room_id]
         room.status = GameStatus.GRACE_PERIOD
         room.game_state.game_phase = "grace_period"
         room.grace_period_end = datetime.now() + timedelta(seconds=10)
@@ -637,7 +703,8 @@ class GameRoomManager:
         """
         Finalize scores and end the game (transition from grace period to finished)
         """
-        room = self.rooms.get(room_id)
+        resolved_room_id = self._resolve_room_id(room_id)
+        room = self.rooms.get(resolved_room_id)
         if not room:
             return None
 
@@ -664,7 +731,7 @@ class GameRoomManager:
         winner_id = winner.player_id if winner else None
 
         if winner_id:
-            self.end_game(room_id, winner_id)
+            self.end_game(resolved_room_id, winner_id)
 
         return winner_id
 
@@ -1063,6 +1130,7 @@ async def join_room(room_id: str, request: JoinRoomRequest):
     """
     Join a room
     """
+    room_id = room_manager._normalize_room_id(room_id)
     try:
         room, player_id = room_manager.join_room(room_id, request.username)
         room_manager.touch_room(room_id)
@@ -1108,6 +1176,7 @@ async def start_room_game(room_id: str):
 
 @app.websocket("/ws/{room_id}")
 async def websocket_endpoint(websocket: WebSocket, room_id: str):
+    room_id = room_manager._normalize_room_id(room_id)
     """
     WebSocket endpoint for real-time game communication
     """

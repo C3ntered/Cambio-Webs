@@ -69,10 +69,11 @@ async function joinGame(username, roomId = null) {
         throw new Error('Username is required');
     }
 
-    const endpoint = roomId ? `/api/rooms/${roomId}/join` : '/api/rooms';
+    const normalizedRoomId = roomId ? roomId.trim().toUpperCase() : '';
+    const endpoint = normalizedRoomId ? `/api/rooms/${normalizedRoomId}/join` : '/api/rooms';
     let payload;
 
-    if (roomId) {
+    if (normalizedRoomId) {
         payload = { username };
     } else {
         const handSize = document.getElementById('hand-size-select')?.value || 4;
@@ -104,11 +105,11 @@ async function joinGame(username, roomId = null) {
     // Handle different response formats: create room returns Room directly, join returns {room, player_id}
     let room, playerId, joinedRoomId;
 
-    if (roomId) {
+    if (normalizedRoomId) {
         // Joining an existing room
         room = data.room;
         playerId = data.player_id;
-        joinedRoomId = roomId;
+        joinedRoomId = normalizedRoomId;
     } else {
         // Creating a new room - Room object is returned directly
         room = data;
@@ -839,7 +840,7 @@ function renderBoard(room, yourPlayerId) {
     // Update room ID display
     const roomIdDisplay = document.getElementById('room-id-display');
     if (roomIdDisplay && room.room_id) {
-        roomIdDisplay.innerText = room.room_id;
+        roomIdDisplay.innerText = String(room.room_id).toUpperCase();
     }
 
     // Update player list

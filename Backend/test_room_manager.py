@@ -63,3 +63,17 @@ def test_deck_no_adjustment_if_already_two():
     manager.start_game(room.room_id)
     assert room.num_decks == 2
     assert len(room.game_state.deck) == (2 * 54) - (2 * 4) - 1
+
+
+def test_room_code_is_short_and_case_insensitive_for_joining():
+    manager = GameRoomManager()
+
+    room = manager.create_room(username="Player1")
+
+    assert len(room.room_id) == 6
+
+    joined_room, player_id = manager.join_room(room.room_id.lower(), "Player2")
+
+    assert joined_room.room_id == room.room_id
+    assert player_id
+    assert len(joined_room.players) == 2
