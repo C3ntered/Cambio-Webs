@@ -362,8 +362,8 @@ function handleSocketMessage(event) {
         case 'cards_swapped':
             console.log('cards_swapped message received', message.data);
             pendingDrawnCard = null; // Ensure draw state is cleared
-            notifySwap(message.data);
-            recordAction(getSwapActionText(message.data), 'swap');
+            notify(message.data.message || 'Cards were swapped');
+            recordAction(message.data.message || 'Cards were swapped', 'swap');
 
             const { player1_id, card1_index, player2_id, card2_index } = message.data;
 
@@ -383,6 +383,8 @@ function handleSocketMessage(event) {
 
             if (player1_id !== undefined && card1_index !== undefined && player2_id !== undefined && card2_index !== undefined) {
                 animateSwap(player1_id, card1_index, player2_id, card2_index, finishSwap);
+            } else if (player1_id !== undefined && card1_index !== undefined && message.data.draw_source) {
+                animateDrawSwap(player1_id, card1_index, message.data.draw_source, finishSwap);
             } else {
                 finishSwap();
             }
@@ -1484,74 +1486,6 @@ function renderActionFeed() {
     });
 }
 
-function getSwapActionText(data) {
-    if (!data) return 'Cards were swapped';
-    if (data.swapped_out_card && data.swapped_in_card) {
-        return data.message || `Swapped ${formatCard(data.swapped_out_card)} for ${formatCard(data.swapped_in_card)}`;
-    }
-    return data.message || 'Cards were swapped';
-}
-
-function notifySwap(data) {
-    if (!data?.swapped_out_card || !data?.swapped_in_card) {
-        notify(data?.message || 'Cards were swapped');
-        return;
-    }
-
-    const area = document.getElementById('notifications');
-    if (!area) {
-        alert(getSwapActionText(data));
-        return;
-    }
-
-    const item = document.createElement('div');
-    item.className = 'swap-toast';
-
-    const title = document.createElement('div');
-    title.className = 'swap-toast-title';
-    title.textContent = data.message || 'Cards were swapped';
-    item.appendChild(title);
-
-    const cards = document.createElement('div');
-    cards.className = 'swap-toast-cards';
-
-    const outWrap = createSwapToastCard('Out', data.swapped_out_card);
-    const arrow = document.createElement('div');
-    arrow.className = 'swap-toast-arrow';
-    arrow.textContent = '->';
-    const inWrap = createSwapToastCard('In', data.swapped_in_card);
-
-    cards.appendChild(outWrap);
-    cards.appendChild(arrow);
-    cards.appendChild(inWrap);
-    item.appendChild(cards);
-
-    area.prepend(item);
-    setTimeout(() => {
-        if (item.parentNode) {
-            item.parentNode.removeChild(item);
-        }
-    }, 4500);
-}
-
-function createSwapToastCard(label, card) {
-    const wrap = document.createElement('div');
-    wrap.className = 'swap-toast-card-wrap';
-
-    const labelEl = document.createElement('div');
-    labelEl.className = 'swap-toast-card-label';
-    labelEl.textContent = label;
-
-    const cardEl = document.createElement('div');
-    cardEl.className = 'game-card swap-toast-card';
-    cardEl.title = formatCard(card);
-    renderCardContent(cardEl, card);
-
-    wrap.appendChild(labelEl);
-    wrap.appendChild(cardEl);
-    return wrap;
-}
-
 function notify(text, duration = 3000) { // Set default duration to 3000ms
     console.log(text);
     const area = document.getElementById('notifications');
@@ -1904,6 +1838,104 @@ function animateSwap(player1_id, card1_index, player2_id, card2_index, callback)
         console.log('Animation finished, calling callback');
         if (callback) callback();
     }, 700);
+}
+
+function animateDrawSwap(playerId, cardIndex, drawSource, callback) {
+    console.log('animateDrawSwap called:', playerId, cardIndex, drawSource);
+    isAnimating = true;
+
+    const target = findCardElement(playerId, cardIndex, latestRoomState, playerContext.playerId);
+    if (!target) {
+        console.warn('animateDrawSwap: Target card not found');
+        isAnimating = false;
+        if (callback) callback();
+        return;
+    }
+
+    const source = findDrawSwapSourceElement(drawSource);
+    const targetRect = target.getBoundingClientRect();
+    const sourceRect = source
+        ? source.getBoundingClientRect()
+        : {
+            top: targetRect.top - 80,
+            left: targetRect.left,
+            width: targetRect.width,
+            height: targetRect.height
+        };
+
+    const incoming = createHiddenCardClone(source, sourceRect, targetRect);
+    const outgoing = target.cloneNode(true);
+    outgoing.classList.add('swapping-clone');
+
+    styleFixedClone(outgoing, targetRect);
+    document.body.appendChild(outgoing);
+    target.style.visibility = 'hidden';
+
+    void incoming.offsetHeight;
+
+    requestAnimationFrame(() => {
+        incoming.style.top = targetRect.top + 'px';
+        incoming.style.left = targetRect.left + 'px';
+        incoming.style.width = targetRect.width + 'px';
+        incoming.style.height = targetRect.height + 'px';
+
+        if (source) {
+            outgoing.style.top = sourceRect.top + 'px';
+            outgoing.style.left = sourceRect.left + 'px';
+            outgoing.style.width = sourceRect.width + 'px';
+            outgoing.style.height = sourceRect.height + 'px';
+        } else {
+            outgoing.style.transform = 'translateY(40px) scale(0.85)';
+            outgoing.style.opacity = '0';
+        }
+    });
+
+    setTimeout(() => {
+        if (incoming.parentNode) document.body.removeChild(incoming);
+        if (outgoing.parentNode) document.body.removeChild(outgoing);
+        target.style.visibility = 'visible';
+        isAnimating = false;
+        if (callback) callback();
+    }, 700);
+}
+
+function findDrawSwapSourceElement(drawSource) {
+    const ownDrawnCard = document.querySelector('#drawn-card-display .game-card');
+    if (ownDrawnCard) return ownDrawnCard;
+
+    if (drawSource === 'discard') {
+        return document.querySelector('#top-card .game-card') || document.getElementById('discard-pile');
+    }
+
+    return document.getElementById('deck-card') || document.getElementById('deck-pile');
+}
+
+function createHiddenCardClone(source, sourceRect, targetRect) {
+    const clone = source ? source.cloneNode(true) : document.createElement('div');
+    clone.classList.add('swapping-clone');
+
+    // Keep draw-swap animations private: a face-down card moves into the hand.
+    clone.innerHTML = '';
+    clone.classList.remove('card-red', 'card-black', 'card-special-king');
+    clone.classList.add('card-back', 'game-card');
+
+    styleFixedClone(clone, sourceRect);
+    clone.style.width = (sourceRect.width || targetRect.width) + 'px';
+    clone.style.height = (sourceRect.height || targetRect.height) + 'px';
+    document.body.appendChild(clone);
+    return clone;
+}
+
+function styleFixedClone(clone, rect) {
+    clone.style.position = 'fixed';
+    clone.style.top = rect.top + 'px';
+    clone.style.left = rect.left + 'px';
+    clone.style.width = rect.width + 'px';
+    clone.style.height = rect.height + 'px';
+    clone.style.margin = '0';
+    clone.style.transform = 'none';
+    clone.style.zIndex = '9999';
+    clone.style.pointerEvents = 'none';
 }
 
 function applyIndicators() {

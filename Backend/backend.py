@@ -1537,11 +1537,9 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
                     await room_manager.broadcast_to_room(room_id, {
                         "type": "cards_swapped",
                         "data": {
-                            "message": f"{player.username} swapped {discarded_card} for {drawn_card}.",
+                            "message": f"{player.username} swapped a drawn card into their hand.",
                             "player1_id": player.player_id,
                             "card1_index": hand_index,
-                            "swapped_out_card": discarded_card.model_dump(mode='json'),
-                            "swapped_in_card": drawn_card.model_dump(mode='json'),
                             "draw_source": player.last_draw_source,
                             "room": room.model_dump(mode='json')
                         }
