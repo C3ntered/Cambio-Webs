@@ -1527,8 +1527,9 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
                         continue
 
                     discarded_card = player.hand[hand_index]
+                    drawn_card = player.pending_drawn_card
                     # Execute swap - no match required for swap
-                    player.hand[hand_index] = player.pending_drawn_card
+                    player.hand[hand_index] = drawn_card
                     room.game_state.discard_pile.append(discarded_card)
                     player.pending_drawn_card = None
                     
@@ -1536,9 +1537,12 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
                     await room_manager.broadcast_to_room(room_id, {
                         "type": "cards_swapped",
                         "data": {
-                            "message": f"{player.username} swapped their card #{hand_index + 1} with the drawn card.",
+                            "message": f"{player.username} swapped {discarded_card} for {drawn_card}.",
                             "player1_id": player.player_id,
                             "card1_index": hand_index,
+                            "swapped_out_card": discarded_card.model_dump(mode='json'),
+                            "swapped_in_card": drawn_card.model_dump(mode='json'),
+                            "draw_source": player.last_draw_source,
                             "room": room.model_dump(mode='json')
                         }
                     })

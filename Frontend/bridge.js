@@ -362,8 +362,8 @@ function handleSocketMessage(event) {
         case 'cards_swapped':
             console.log('cards_swapped message received', message.data);
             pendingDrawnCard = null; // Ensure draw state is cleared
-            notify(message.data.message);
-            recordAction(message.data.message || 'Cards were swapped', 'swap');
+            notifySwap(message.data);
+            recordAction(getSwapActionText(message.data), 'swap');
 
             const { player1_id, card1_index, player2_id, card2_index } = message.data;
 
@@ -1482,6 +1482,74 @@ function renderActionFeed() {
         item.innerText = time ? `${time} - ${action.text}` : action.text;
         feed.appendChild(item);
     });
+}
+
+function getSwapActionText(data) {
+    if (!data) return 'Cards were swapped';
+    if (data.swapped_out_card && data.swapped_in_card) {
+        return data.message || `Swapped ${formatCard(data.swapped_out_card)} for ${formatCard(data.swapped_in_card)}`;
+    }
+    return data.message || 'Cards were swapped';
+}
+
+function notifySwap(data) {
+    if (!data?.swapped_out_card || !data?.swapped_in_card) {
+        notify(data?.message || 'Cards were swapped');
+        return;
+    }
+
+    const area = document.getElementById('notifications');
+    if (!area) {
+        alert(getSwapActionText(data));
+        return;
+    }
+
+    const item = document.createElement('div');
+    item.className = 'swap-toast';
+
+    const title = document.createElement('div');
+    title.className = 'swap-toast-title';
+    title.textContent = data.message || 'Cards were swapped';
+    item.appendChild(title);
+
+    const cards = document.createElement('div');
+    cards.className = 'swap-toast-cards';
+
+    const outWrap = createSwapToastCard('Out', data.swapped_out_card);
+    const arrow = document.createElement('div');
+    arrow.className = 'swap-toast-arrow';
+    arrow.textContent = '->';
+    const inWrap = createSwapToastCard('In', data.swapped_in_card);
+
+    cards.appendChild(outWrap);
+    cards.appendChild(arrow);
+    cards.appendChild(inWrap);
+    item.appendChild(cards);
+
+    area.prepend(item);
+    setTimeout(() => {
+        if (item.parentNode) {
+            item.parentNode.removeChild(item);
+        }
+    }, 4500);
+}
+
+function createSwapToastCard(label, card) {
+    const wrap = document.createElement('div');
+    wrap.className = 'swap-toast-card-wrap';
+
+    const labelEl = document.createElement('div');
+    labelEl.className = 'swap-toast-card-label';
+    labelEl.textContent = label;
+
+    const cardEl = document.createElement('div');
+    cardEl.className = 'game-card swap-toast-card';
+    cardEl.title = formatCard(card);
+    renderCardContent(cardEl, card);
+
+    wrap.appendChild(labelEl);
+    wrap.appendChild(cardEl);
+    return wrap;
 }
 
 function notify(text, duration = 3000) { // Set default duration to 3000ms
