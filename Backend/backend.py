@@ -259,6 +259,13 @@ class JoinRoomRequest(BaseModel):
     """
     username: str
 
+class UpdateRoomSettingsRequest(BaseModel):
+    """
+    UpdateRoomSettingsRequest model for changing lobby settings between rounds.
+    """
+    initial_hand_size: Optional[int] = None
+    num_decks: Optional[int] = None
+
 # Constants for card deck creation
 SUITS = ("Hearts", "Diamonds", "Clubs", "Spades")
 RANKS = ("Ace", "2", "3", "4", "5", "6", "7", "8", "9", "10", "Jack", "Queen", "King")
@@ -267,7 +274,7 @@ RANKS = ("Ace", "2", "3", "4", "5", "6", "7", "8", "9", "10", "Jack", "Queen", "
 NUMERIC_RANKS = {str(n) for n in range(2, 11)}
 FACE_RANKS = {"Jack", "Queen", "King"}
 
-def get_card_value(card: Card, red_king_variant: bool = False) -> int:
+def get_card_value(card: Card, num_decks: int = 1) -> int:
     """
     Return the scoring value for a card according to Cambio rules.
     """
@@ -276,9 +283,9 @@ def get_card_value(card: Card, red_king_variant: bool = False) -> int:
     if card.rank in NUMERIC_RANKS:
         return int(card.rank)
     if card.rank in FACE_RANKS:
-        # Red kings count as -1 (or -2 if variant active), black kings count as 10
+        # Red kings count lower with one deck; slightly higher with two decks.
         if card.rank == "King" and card.suit in {"Hearts", "Diamonds"}:
-            return -2 if red_king_variant else -1
+            return -2 if num_decks == 1 else -1
         return 10
     if card.rank == "Joker":
         return 0
@@ -378,7 +385,7 @@ class GameRoomManager:
         room = self.rooms[resolved_room_id]
         room.room_id = self._normalize_room_id(resolved_room_id)
         
-        if room.status != GameStatus.WAITING:
+        if room.status not in (GameStatus.WAITING, GameStatus.FINISHED):
             raise HTTPException(status_code=400, detail="Game already started")
         
         if len(room.players) >= room.max_players:
@@ -395,24 +402,60 @@ class GameRoomManager:
         
         # Removed auto-start - game must be manually started
         return room, player_id
-        
-        if room.status != GameStatus.WAITING:
-            raise HTTPException(status_code=400, detail="Game already started")
-        
-        if len(room.players) >= room.max_players:
-            raise HTTPException(status_code=400, detail="Room is full")
-        
-        player_id = str(uuid.uuid4())[:8]
-        player = Player(
-            player_id=player_id,
-            username=username,
-            is_connected=True
-        )
-        
-        room.players.append(player)
-        
-        # Removed auto-start - game must be manually started
-        return room, player_id
+
+    def update_room_settings(self, room_id: str, initial_hand_size: Optional[int] = None, num_decks: Optional[int] = None) -> Room:
+        """
+        Update room settings while the room is in a lobby state.
+        """
+        resolved_room_id = self._resolve_room_id(room_id)
+        if not resolved_room_id or resolved_room_id not in self.rooms:
+            raise HTTPException(status_code=404, detail="Room not found")
+
+        room = self.rooms[resolved_room_id]
+        if room.status not in (GameStatus.WAITING, GameStatus.FINISHED):
+            raise HTTPException(status_code=400, detail="Settings can only be changed between rounds")
+
+        if initial_hand_size is not None:
+            if initial_hand_size not in (4, 6, 8):
+                raise HTTPException(status_code=400, detail="Hand size must be 4, 6, or 8")
+            room.initial_hand_size = initial_hand_size
+
+        if num_decks is not None:
+            if num_decks not in (1, 2):
+                raise HTTPException(status_code=400, detail="Number of decks must be 1 or 2")
+            room.num_decks = num_decks
+
+        room.last_activity = datetime.now()
+        return room
+
+    def remove_player_from_room(self, room_id: str, player_id: str) -> tuple[Optional[Room], Optional[Player], bool]:
+        """
+        Remove a player from a lobby or finished room. Returns room, player, deleted_room.
+        """
+        resolved_room_id = self._resolve_room_id(room_id)
+        if not resolved_room_id or resolved_room_id not in self.rooms:
+            return None, None, False
+
+        room = self.rooms[resolved_room_id]
+        player = next((p for p in room.players if p.player_id == player_id), None)
+        if not player:
+            return room, None, False
+
+        room.players = [p for p in room.players if p.player_id != player_id]
+        self.remove_connection(resolved_room_id, player_id)
+
+        if not room.players:
+            self.rooms.pop(resolved_room_id, None)
+            self.room_connections.pop(resolved_room_id, None)
+            return None, player, True
+
+        if room.game_state.current_turn == player_id:
+            room.game_state.current_turn = room.players[0].player_id if room.players else None
+        if room.last_winner_id == player_id:
+            room.last_winner_id = None
+
+        room.last_activity = datetime.now()
+        return room, player, False
     
     def start_game(self, room_id: str):
         """
@@ -429,10 +472,10 @@ class GameRoomManager:
         room.status = GameStatus.PLAYING
         room.game_state.game_phase = "dealing"
         
-        # Auto-adjust number of decks based on actual player count if needed
-        # Logic: If cards drawn (players * hand_size) > half a deck (26), add another deck.
+        # Auto-adjust number of decks based on actual player count if needed.
+        # If the deal uses more than two-thirds of one 54-card deck, use two decks.
         total_drawn = len(room.players) * room.initial_hand_size
-        if total_drawn > 26 and room.num_decks == 1:
+        if total_drawn > 36 and room.num_decks == 1:
             room.num_decks = 2
         
         # Safety Check: If user forced 1 deck but we physically need more (e.g. 50 cards needed), force 2.
@@ -716,7 +759,7 @@ class GameRoomManager:
             count = 0
             for card in player.hand:
                 if card:
-                    score += get_card_value(card, room.red_king_variant)
+                    score += get_card_value(card, room.num_decks)
                     count += 1
             player.score = score
             player_stats.append((player, score, count))
@@ -1142,6 +1185,25 @@ async def join_room(room_id: str, request: JoinRoomRequest):
         }
     except HTTPException as e:
         raise e
+
+@app.patch("/api/rooms/{room_id}/settings", response_model=Room)
+async def update_room_settings(room_id: str, request: UpdateRoomSettingsRequest):
+    """
+    Update room settings while waiting or between rounds.
+    """
+    room = room_manager.update_room_settings(
+        room_id,
+        initial_hand_size=request.initial_hand_size,
+        num_decks=request.num_decks
+    )
+    await room_manager.broadcast_to_room(room_id, {
+        "type": "room_settings_updated",
+        "data": {
+            "room": room.model_dump(mode='json'),
+            "message": "Room settings updated."
+        }
+    })
+    return room
 
 @app.post("/api/rooms/{room_id}/start")
 async def start_room_game(room_id: str):
@@ -1648,6 +1710,54 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
                 
                 player.pending_ability = None
                 await room_manager.end_turn(room_id)
+
+            elif msg_type == "update_settings":
+                settings_data = message.get("data", {})
+                try:
+                    room = room_manager.update_room_settings(
+                        room_id,
+                        initial_hand_size=settings_data.get("initial_hand_size"),
+                        num_decks=settings_data.get("num_decks")
+                    )
+                except HTTPException as e:
+                    await websocket.send_json({"type": "error", "message": e.detail})
+                    continue
+
+                await room_manager.broadcast_to_room(room_id, {
+                    "type": "room_settings_updated",
+                    "data": {
+                        "room": room.model_dump(mode='json'),
+                        "message": f"{player.username} updated room settings."
+                    }
+                })
+
+            elif msg_type == "leave_room":
+                if room.status not in (GameStatus.WAITING, GameStatus.FINISHED):
+                    await websocket.send_json({"type": "error", "message": "You can only leave between rounds"})
+                    continue
+
+                removed_name = player.username
+                updated_room, _, deleted_room = room_manager.remove_player_from_room(room_id, player_id)
+                await websocket.send_json({
+                    "type": "left_room",
+                    "data": {
+                        "message": "You left the room."
+                    }
+                })
+
+                if not deleted_room and updated_room:
+                    await room_manager.broadcast_to_room(room_id, {
+                        "type": "player_left",
+                        "data": {
+                            "player_id": player_id,
+                            "username": removed_name,
+                            "room": updated_room.model_dump(mode='json')
+                        }
+                    }, exclude_player=player_id)
+
+                player_id = None
+                await websocket.close()
+                return
 
             elif msg_type == "end_viewing":
                 # Transition from Viewing Phase to Playing Phase

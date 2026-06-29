@@ -541,13 +541,22 @@ function handleSocketMessage(event) {
             }
             break;
         case 'player_left':
-            notify(`Player ${message.data.player_id} left the room`);
+            notify(message.data.username ? `${message.data.username} left the room` : `Player ${message.data.player_id} left the room`);
             if (message.data.room) {
                 latestRoomState = message.data.room;
                 renderBoard(message.data.room, playerContext.playerId);
             } else if (latestRoomState) {
                 renderBoard(latestRoomState, playerContext.playerId);
             }
+            break;
+        case 'room_settings_updated':
+            notify(message.data.message || 'Room settings updated');
+            latestRoomState = message.data.room;
+            renderBoard(message.data.room, playerContext.playerId);
+            break;
+        case 'left_room':
+            notify(message.data.message || 'You left the room');
+            resetToLobby();
             break;
         case 'error':
             // Auto-recover from state mismatch if backend says "No pending drawn card"
@@ -888,6 +897,7 @@ function renderBoard(room, yourPlayerId) {
         playerListContainer.appendChild(list);
     }
     renderActionFeed();
+    renderRoomSettings(room);
 
     // Show/hide Start Game button based on game status
     const startGameBtn = document.getElementById('start-game-btn');
@@ -1500,6 +1510,101 @@ function renderActionFeed() {
     });
 }
 
+function renderRoomSettings(room) {
+    const panel = document.getElementById('room-settings');
+    const handSelect = document.getElementById('game-hand-size-select');
+    const decksSelect = document.getElementById('game-num-decks-select');
+    const redKingNote = document.getElementById('red-king-note');
+    const leaveBtn = document.getElementById('leave-room-btn');
+    if (!room) return;
+
+    const canEditSettings = room.status?.toLowerCase() === GAME_STATUS.WAITING ||
+        room.status?.toLowerCase() === GAME_STATUS.FINISHED;
+
+    if (panel) panel.style.display = canEditSettings ? 'block' : 'none';
+    if (handSelect) {
+        handSelect.value = String(room.initial_hand_size || 4);
+        handSelect.disabled = !canEditSettings;
+    }
+    if (decksSelect) {
+        decksSelect.value = String(room.num_decks || 1);
+        decksSelect.disabled = !canEditSettings;
+    }
+    if (redKingNote) {
+        redKingNote.textContent = Number(room.num_decks) === 2
+            ? 'Red Kings score -1 with two decks.'
+            : 'Red Kings score -2 with one deck.';
+    }
+    if (leaveBtn) {
+        leaveBtn.disabled = !canEditSettings;
+        leaveBtn.title = canEditSettings ? 'Leave this room' : 'You can leave between rounds';
+    }
+}
+
+function updateRoomSettings() {
+    if (!latestRoomState) return;
+
+    const status = latestRoomState.status?.toLowerCase();
+    if (status !== GAME_STATUS.WAITING && status !== GAME_STATUS.FINISHED) {
+        notify('Settings can only be changed between rounds.');
+        renderRoomSettings(latestRoomState);
+        return;
+    }
+
+    const handSize = parseInt(document.getElementById('game-hand-size-select')?.value || latestRoomState.initial_hand_size || 4);
+    const numDecks = parseInt(document.getElementById('game-num-decks-select')?.value || latestRoomState.num_decks || 1);
+    sendMessage('update_settings', {
+        initial_hand_size: handSize,
+        num_decks: numDecks
+    });
+}
+
+function leaveRoom() {
+    if (!latestRoomState) return;
+
+    const status = latestRoomState.status?.toLowerCase();
+    if (status !== GAME_STATUS.WAITING && status !== GAME_STATUS.FINISHED) {
+        notify('You can leave between rounds.');
+        return;
+    }
+
+    if (confirm('Leave this room?')) {
+        sendMessage('leave_room');
+    }
+}
+
+function resetToLobby() {
+    if (socket) {
+        socket.close();
+        socket = null;
+    }
+
+    playerContext = {
+        username: null,
+        roomId: null,
+        playerId: null,
+    };
+    latestRoomState = null;
+    pendingDrawnCard = null;
+    pendingAbility = null;
+    selectingTargets = false;
+    selectedTargets = [];
+    pendingSwapDecision = false;
+    eliminationTarget = null;
+    activeLookIndicators = {};
+
+    const lobby = document.getElementById('lobby');
+    const board = document.getElementById('game-board');
+    const title = document.querySelector('h1');
+    const gameOverModal = document.getElementById('game-over-modal');
+    if (lobby) lobby.style.display = 'block';
+    if (board) board.style.display = 'none';
+    if (title) title.style.display = '';
+    if (gameOverModal) gameOverModal.style.display = 'none';
+    document.body.classList.remove('in-game');
+    updateStatus('Left room');
+}
+
 function notify(text, duration = 3000) { // Set default duration to 3000ms
     console.log(text);
     const area = document.getElementById('notifications');
@@ -1725,6 +1830,8 @@ window.startGame = startGame;
 window.playAgain = playAgain;
 window.shareGameResult = shareGameResult;
 window.skipAbility = skipAbility;
+window.updateRoomSettings = updateRoomSettings;
+window.leaveRoom = leaveRoom;
 window.toggleAdminMode = toggleAdminMode;
 
 function highlightCard(pid, idx, duration = 3000) {
