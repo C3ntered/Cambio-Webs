@@ -314,6 +314,7 @@ function handleSocketMessage(event) {
             selectedTargets = [];
             pendingSwapDecision = false;
             eliminationTarget = null;
+            clearPersistentLookIndicators();
             renderBoard(message.data.room, message.data.your_player_id || playerContext.playerId);
             break;
         case 'game_reset': {
@@ -348,6 +349,7 @@ function handleSocketMessage(event) {
             selectedTargets = [];
             pendingSwapDecision = false;
             eliminationTarget = null;
+            clearPersistentLookIndicators();
             latestRoomState = message.data.room;
             renderBoard(message.data.room, message.data.your_player_id || playerContext.playerId);
             break;
@@ -672,26 +674,38 @@ function playAgain() {
 function resolveSwapDecision(doSwap) {
     sendMessage('resolve_swap_decision', { swap: doSwap });
     pendingSwapDecision = false;
-    // Clear persistent look indicators
-    for (const pid in activeLookIndicators) {
-        for (const idx in activeLookIndicators[pid]) {
-            if (activeLookIndicators[pid][idx] === 'PERSIST') {
-                delete activeLookIndicators[pid][idx];
-            }
-        }
-    }
+    clearPersistentLookIndicators();
     renderBoard(latestRoomState, playerContext.playerId); // Re-render to hide cards
     const panel = document.getElementById('ability-panel');
     if (panel) panel.style.display = 'none';
 }
 
 function skipAbility() {
+    if (pendingSwapDecision) {
+        resolveSwapDecision(false);
+        return;
+    }
+
     sendMessage('skip_ability');
     pendingAbility = null;
     selectingTargets = false;
     selectedTargets = [];
+    clearPersistentLookIndicators();
     const panel = document.getElementById('ability-panel');
     if (panel) panel.style.display = 'none';
+}
+
+function clearPersistentLookIndicators() {
+    for (const pid in activeLookIndicators) {
+        for (const idx in activeLookIndicators[pid]) {
+            if (activeLookIndicators[pid][idx] === 'PERSIST') {
+                delete activeLookIndicators[pid][idx];
+            }
+        }
+        if (Object.keys(activeLookIndicators[pid]).length === 0) {
+            delete activeLookIndicators[pid];
+        }
+    }
 }
 
 function startAbilitySelection(ability) {
@@ -1029,6 +1043,7 @@ function renderBoard(room, yourPlayerId) {
         // Ability panel visibility
         const abilityPanel = document.getElementById('ability-panel');
         if (abilityPanel) {
+            const skipAbilityBtn = document.getElementById('skip-ability-btn');
             if (pendingSwapDecision) {
                 abilityPanel.style.display = 'block';
                 const nameDisplay = document.getElementById('ability-name-display');
@@ -1053,11 +1068,10 @@ function renderBoard(room, yourPlayerId) {
                     controls.appendChild(swapBtn);
                     controls.appendChild(keepBtn);
                 }
-                // Hide Skip Ability button during decision if possible, or repurpose it?
-                // The main skip button is outside controls div in HTML. We might want to hide it.
-                // But let's leave it for now.
+                if (skipAbilityBtn) skipAbilityBtn.style.display = 'none';
             } else {
                 abilityPanel.style.display = pendingAbility ? 'block' : 'none';
+                if (skipAbilityBtn) skipAbilityBtn.style.display = '';
                 // Clear controls if not decision
                 const controls = document.getElementById('ability-controls');
                 if (controls && !pendingAbility) controls.innerHTML = '';
