@@ -60,7 +60,7 @@ let selectingTargets = false; // Mode for selecting targets
 let selectedTargets = [];     // Targets selected so far
 let pendingSwapDecision = false; // Mode for deciding whether to swap
 let eliminationTarget = null; // Target for elimination (waiting for replacement card selection)
-let adminMode = false;
+// let adminMode = false; // ADMIN MODE - Disabled for production
 let isAnimating = false;
 let activeLookIndicators = {}; // State of cards being looked at
 const actionHistory = [];
@@ -1216,16 +1216,17 @@ function renderBoard(room, yourPlayerId) {
                     } else {
                         // Bottom row = odd indices (1, 3, 5...) in column-flow layout
                         const isBottomCard = (index % 2) === 1;
-                        const isVisible = (isViewingPhase && isBottomCard) || adminMode || (activeLookIndicators[yourPlayerId] && activeLookIndicators[yourPlayerId][index] === "PERSIST");
+                        // const isVisible = (isViewingPhase && isBottomCard) || adminMode || (activeLookIndicators[yourPlayerId] && activeLookIndicators[yourPlayerId][index] === "PERSIST"); // ADMIN MODE - Disabled
+                        const isVisible = (isViewingPhase && isBottomCard) || (activeLookIndicators[yourPlayerId] && activeLookIndicators[yourPlayerId][index] === "PERSIST");
 
                         // Clear old classes
                         btn.classList.remove('card-back', 'card-red', 'card-black', 'card-special-king');
 
                         if (isVisible) {
                             renderCardContent(btn, card);
-                            if (adminMode) {
-                                btn.style.backgroundColor = "#e3f2fd";
-                            }
+                            // if (adminMode) { // ADMIN MODE - Disabled
+                            //     btn.style.backgroundColor = "#e3f2fd";
+                            // }
                         } else {
                             btn.innerHTML = ''; // Clear structure
                             btn.classList.add('card-back');
@@ -1311,7 +1312,8 @@ function renderBoard(room, yourPlayerId) {
                         btn.style.cursor = "default";
                     } else {
                         const isRevealed = (activeLookIndicators[player.player_id] && activeLookIndicators[player.player_id][index] === "PERSIST");
-                        if (adminMode || isRevealed) {
+                        // if (adminMode || isRevealed) { // ADMIN MODE - Disabled
+                        if (isRevealed) {
                             renderCardContent(btn, card);
                             btn.style.backgroundColor = "white";
                             btn.classList.remove('card-back');
@@ -1630,15 +1632,16 @@ function updateStatus(status) {
     }
 }
 
-function toggleAdminMode() {
-    const checkbox = document.getElementById('admin-mode-toggle');
-    if (checkbox) {
-        adminMode = checkbox.checked;
-        if (latestRoomState) {
-            renderBoard(latestRoomState, playerContext.playerId);
-        }
-    }
-}
+// ADMIN MODE - Disabled for production
+// function toggleAdminMode() {
+//     const checkbox = document.getElementById('admin-mode-toggle');
+//     if (checkbox) {
+//         adminMode = checkbox.checked;
+//         if (latestRoomState) {
+//             renderBoard(latestRoomState, playerContext.playerId);
+//         }
+//     }
+// }
 
 function copyRoomId() {
     const roomId = playerContext.roomId;
@@ -1832,7 +1835,7 @@ window.shareGameResult = shareGameResult;
 window.skipAbility = skipAbility;
 window.updateRoomSettings = updateRoomSettings;
 window.leaveRoom = leaveRoom;
-window.toggleAdminMode = toggleAdminMode;
+// window.toggleAdminMode = toggleAdminMode; // ADMIN MODE - Disabled for production
 
 function highlightCard(pid, idx, duration = 3000) {
     const btn = findCardElement(pid, idx, latestRoomState, playerContext.playerId);

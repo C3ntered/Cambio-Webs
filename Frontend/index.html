@@ -1126,7 +1126,8 @@
             flex-wrap: wrap;
         }
 
-        .admin-control {
+        /* ADMIN MODE - Disabled for production */
+        /* .admin-control {
             display: flex;
             align-items: center;
             gap: 6px;
@@ -1148,7 +1149,7 @@
             color: white;
             font-size: 12px;
             font-weight: 800;
-        }
+        } */
 
         .room-actions {
             display: flex;
@@ -1783,10 +1784,11 @@
                     <div class="room-actions">
                         <button id="copy-room-id" onclick="copyRoomId()">Copy Code</button>
                         <button class="leave-room-btn" id="leave-room-btn" onclick="leaveRoom()">Leave Room</button>
-                        <label class="admin-control" title="Reveals all cards on this device only. Useful for testing, not regular play.">
+                        <!-- ADMIN MODE - Disabled for production -->
+                        <!-- <label class="admin-control" title="Reveals all cards on this device only. Useful for testing, not regular play.">
                             <input id="admin-mode-toggle" onchange="toggleAdminMode()" type="checkbox" /> Admin Mode
                             <span class="help-dot" aria-label="Admin Mode reveals all cards on this device only.">?</span>
-                        </label>
+                        </label> -->
                     </div>
                 </div>
                 <div id="player-list">
