@@ -1,77 +1,374 @@
-<!-- By Kai Holland, Last Edits: 3/10/2026 -->
+<!-- By Kai Holland, Last Edits: 6/28/2026 -->
 <!DOCTYPE html>
 <html lang="en">
 
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Cambio Rules</title>
+    <meta name="description"
+        content="Learn how to play Cambio, the memory card game where the lowest score wins. Includes quick rules, card abilities, and examples.">
+    <title>How to Play Cambio</title>
     <style>
+        :root {
+            --felt: #1f6f3a;
+            --felt-dark: #123f29;
+            --panel: #fffdf7;
+            --ink: #17201b;
+            --muted: #5b6b62;
+            --line: rgba(23, 32, 27, 0.14);
+            --gold: #f4b942;
+            --blue: #2563eb;
+            --red: #d64545;
+        }
+
+        * {
+            box-sizing: border-box;
+        }
+
         body {
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
             margin: 0;
-            padding: 0;
-            background-color: #2e7d32;
-            color: white;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
+            background:
+                radial-gradient(circle at 10% 0%, rgba(244, 185, 66, 0.18), transparent 28rem),
+                linear-gradient(135deg, var(--felt-dark), var(--felt));
+            color: var(--ink);
             min-height: 100vh;
         }
 
-        h1 {
-            margin-top: 20px;
-            text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.5);
+        header,
+        main {
+            width: min(1040px, calc(100% - 32px));
+            margin: 0 auto;
         }
 
-        .container {
-            width: 90%;
-            max-width: 1000px;
-            background: rgba(255, 255, 255, 0.9);
-            padding: 20px;
-            border-radius: 12px;
-            box-shadow: 0 10px 25px rgba(0, 0, 0, 0.3);
-            margin: 20px 0;
-            height: 80vh;
-            display: flex;
-            flex-direction: column;
-        }
-
-        iframe {
-            width: 100%;
-            height: 100%;
-            border: none;
-            border-radius: 8px;
-        }
-
-        .back-btn {
-            background-color: #4CAF50;
+        header {
             color: white;
-            padding: 10px 20px;
-            text-decoration: none;
-            font-size: 18px;
-            border-radius: 6px;
-            font-weight: bold;
-            display: inline-block;
-            margin-bottom: 20px;
-            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.2);
+            padding: 28px 0 14px;
         }
 
-        .back-btn:hover {
-            background-color: #45a049;
+        h1 {
+            margin: 0 0 8px;
+            font-size: 34px;
+            letter-spacing: 0;
+        }
+
+        header p {
+            max-width: 680px;
+            margin: 0;
+            line-height: 1.5;
+            color: rgba(255, 255, 255, 0.88);
+        }
+
+        .top-links {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            margin-top: 18px;
+        }
+
+        .top-links a {
+            color: white;
+            border: 1px solid rgba(255, 255, 255, 0.35);
+            background: rgba(255, 255, 255, 0.12);
+            padding: 10px 14px;
+            border-radius: 6px;
+            text-decoration: none;
+            font-weight: 800;
+        }
+
+        .rules-shell {
+            display: grid;
+            grid-template-columns: minmax(0, 1.35fr) minmax(280px, 0.65fr);
+            gap: 18px;
+            padding-bottom: 36px;
+        }
+
+        section,
+        aside {
+            background: var(--panel);
+            border-radius: 8px;
+            padding: 22px;
+            box-shadow: 0 18px 40px rgba(0, 0, 0, 0.22);
+        }
+
+        section + section {
+            margin-top: 18px;
+        }
+
+        h2 {
+            margin: 0 0 12px;
+            font-size: 22px;
+        }
+
+        h3 {
+            margin: 18px 0 8px;
+            font-size: 17px;
+        }
+
+        p,
+        li {
+            line-height: 1.55;
+        }
+
+        ol,
+        ul {
+            padding-left: 22px;
+        }
+
+        .quick-grid {
+            display: grid;
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+            gap: 10px;
+        }
+
+        .quick-card {
+            border: 1px solid var(--line);
+            border-radius: 8px;
+            padding: 14px;
+            background: white;
+        }
+
+        .quick-card strong {
+            display: block;
+            margin-bottom: 4px;
+        }
+
+        .example-hand {
+            display: grid;
+            grid-template-columns: repeat(2, 72px);
+            gap: 8px;
+            margin: 14px 0;
+        }
+
+        .mini-card {
+            height: 100px;
+            border: 2px solid #1f2937;
+            border-radius: 8px;
+            background: white;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 900;
+            font-size: 24px;
+        }
+
+        .mini-card.red {
+            color: var(--red);
+            border-color: var(--red);
+        }
+
+        .mini-card.back {
+            color: white;
+            background: repeating-linear-gradient(135deg, #155bb5 0, #155bb5 10px, #2563eb 10px, #2563eb 20px);
+        }
+
+        .ability-table {
+            width: 100%;
+            border-collapse: collapse;
+            overflow: hidden;
+            border-radius: 8px;
+            background: white;
+        }
+
+        .ability-table th,
+        .ability-table td {
+            text-align: left;
+            padding: 12px;
+            border-bottom: 1px solid var(--line);
+            vertical-align: top;
+        }
+
+        .ability-table th {
+            background: #eaf4ee;
+        }
+
+        details {
+            border: 1px solid var(--line);
+            border-radius: 8px;
+            background: white;
+            padding: 12px 14px;
+            margin-top: 10px;
+        }
+
+        summary {
+            cursor: pointer;
+            font-weight: 800;
+        }
+
+        .score-list {
+            list-style: none;
+            padding: 0;
+            margin: 0;
+        }
+
+        .score-list li {
+            display: flex;
+            justify-content: space-between;
+            gap: 14px;
+            border-bottom: 1px solid var(--line);
+            padding: 8px 0;
+        }
+
+        .note {
+            color: var(--muted);
+            font-size: 14px;
+            margin-bottom: 0;
+        }
+
+        @media (max-width: 820px) {
+            header,
+            main {
+                width: min(100% - 20px, 1040px);
+            }
+
+            header {
+                padding-top: 20px;
+            }
+
+            h1 {
+                font-size: 28px;
+            }
+
+            .rules-shell {
+                grid-template-columns: 1fr;
+            }
+
+            section,
+            aside {
+                padding: 18px;
+            }
+
+            .quick-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .ability-table {
+                display: block;
+                overflow-x: auto;
+            }
         }
     </style>
 </head>
 
 <body>
-    <h1>How to Play Cambio</h1>
-    <a href="/" class="back-btn">← Back to Game</a>
+    <header>
+        <h1>How to Play Cambio</h1>
+        <p>Cambio is a memory card game where you try to finish with the lowest score. The trick is that most cards stay face down, so every peek, swap, and guess matters.</p>
+        <nav class="top-links" aria-label="Rules links">
+            <a href="/">Back to Game</a>
+            <a href="/static/rules.pdf" target="_blank">Open PDF</a>
+        </nav>
+    </header>
 
-    <div class="container">
-        <iframe src="/static/rules.pdf" type="application/pdf">
-            <p>Your browser does not support PDFs. <a href="/static/rules.pdf">Download the PDF</a>.</p>
-        </iframe>
-    </div>
+    <main class="rules-shell">
+        <div>
+            <section>
+                <h2>Quick Start</h2>
+                <div class="quick-grid">
+                    <div class="quick-card">
+                        <strong>Goal</strong>
+                        End with the lowest total card score.
+                    </div>
+                    <div class="quick-card">
+                        <strong>Memory</strong>
+                        At the start, memorize your bottom two cards.
+                    </div>
+                    <div class="quick-card">
+                        <strong>Turns</strong>
+                        Draw, swap or discard, then use any card ability.
+                    </div>
+                </div>
+                <ol>
+                    <li>Each player starts with face-down cards in a two-row grid.</li>
+                    <li>On your turn, draw from the deck or take the top discard.</li>
+                    <li>If you draw from the deck, either swap it with one of your cards or discard it.</li>
+                    <li>If you draw from the discard pile, you must swap it with one of your cards.</li>
+                    <li>When you think you have the lowest hand, call Cambio to trigger the final round.</li>
+                </ol>
+            </section>
+
+            <section>
+                <h2>Example Hand</h2>
+                <p>Your cards stay in fixed slots. Eliminated cards leave empty spaces instead of sliding the hand around.</p>
+                <div class="example-hand" aria-label="Example two by two hand">
+                    <div class="mini-card back">?</div>
+                    <div class="mini-card red">7♥</div>
+                    <div class="mini-card">K♣</div>
+                    <div class="mini-card back">?</div>
+                </div>
+                <p class="note">At game start, the bottom row is briefly visible so you can memorize it.</p>
+            </section>
+
+            <section>
+                <h2>Special Cards</h2>
+                <table class="ability-table">
+                    <thead>
+                        <tr>
+                            <th>Card</th>
+                            <th>Ability</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td>7 or 8</td>
+                            <td>Peek at one of your own cards.</td>
+                        </tr>
+                        <tr>
+                            <td>9 or 10</td>
+                            <td>Peek at one opponent card.</td>
+                        </tr>
+                        <tr>
+                            <td>Jack or Queen</td>
+                            <td>Blind swap any two cards without looking.</td>
+                        </tr>
+                        <tr>
+                            <td>Black King</td>
+                            <td>Look at two cards, then choose whether to swap them.</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </section>
+
+            <section>
+                <h2>FAQ</h2>
+                <details open>
+                    <summary>How do eliminations work?</summary>
+                    <p>If you think another face-down card matches the top discard rank, click it. If you are right, that card is eliminated. If you eliminate an opponent card, you give them one of your cards as a replacement.</p>
+                </details>
+                <details>
+                    <summary>What happens if I guess wrong?</summary>
+                    <p>You draw a penalty card, and your turn ends.</p>
+                </details>
+                <details>
+                    <summary>When should I call Cambio?</summary>
+                    <p>Call Cambio when you think your total is lower than everyone else's. After that, the table gets a final round before scores are counted.</p>
+                </details>
+                <details>
+                    <summary>What is Admin Mode?</summary>
+                    <p>Admin Mode reveals all cards on your own device. It is useful for testing or teaching, but not regular play.</p>
+                </details>
+            </section>
+        </div>
+
+        <aside>
+            <h2>Scoring</h2>
+            <ul class="score-list">
+                <li><span>Ace</span><strong>1</strong></li>
+                <li><span>2-10</span><strong>Face value</strong></li>
+                <li><span>Jack / Queen</span><strong>10</strong></li>
+                <li><span>King</span><strong>13</strong></li>
+                <li><span>Red King variant</span><strong>-2</strong></li>
+            </ul>
+            <h3>Simple Turn Flow</h3>
+            <ol>
+                <li>Draw a card.</li>
+                <li>Swap or discard.</li>
+                <li>Resolve any ability.</li>
+                <li>Watch for elimination chances.</li>
+            </ol>
+            <p class="note">Lowest score wins. Empty slots count as zero.</p>
+        </aside>
+    </main>
 </body>
 
 </html>

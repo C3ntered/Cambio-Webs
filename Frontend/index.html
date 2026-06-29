@@ -1,4 +1,5 @@
-<!-- By Kai Holland, Last Edits: 3/10/2026 -->
+<!-- By Kai Holland, Assisted by ChatGPT for code generation and optimization -->
+<!-- Last Edits: 6/28/2026 -->
 <!DOCTYPE html>
 
 <html lang="en">
@@ -6,9 +7,20 @@
 <head>
     <meta charset="utf-8" />
     <meta content="width=device-width, initial-scale=1.0" name="viewport" />
+    <meta name="description"
+        content="Play Cambio online with friends. Create a room, share a join code, and play the memory card game from any device." />
     <title>Cambio Card Game</title>
     <style>
         :root {
+            --felt: #1f6f3a;
+            --felt-dark: #123f29;
+            --panel: #fffdf7;
+            --ink: #17201b;
+            --muted: #5b6b62;
+            --line: rgba(23, 32, 27, 0.14);
+            --gold: #f4b942;
+            --blue: #2563eb;
+            --danger: #d64545;
             --player-card-width: 118px;
             --player-card-height: 166px;
             --player-card-gap: 12px;
@@ -29,12 +41,14 @@
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
             margin: 0;
             padding: 0;
-            background-color: #2e7d32;
-            /* Green felt color */
+            background:
+                radial-gradient(circle at 20% 0%, rgba(244, 185, 66, 0.16), transparent 28rem),
+                linear-gradient(135deg, var(--felt-dark), var(--felt));
             min-height: 100vh;
             display: flex;
             flex-direction: column;
             align-items: center;
+            color: var(--ink);
         }
 
         h1 {
@@ -44,15 +58,102 @@
         }
 
         #lobby {
-            background: white;
-            padding: 40px;
-            border-radius: 16px;
-            box-shadow: 0 10px 25px rgba(0, 0, 0, 0.2);
-            margin-top: 40px;
+            background: var(--panel);
+            padding: 28px;
+            border-radius: 8px;
+            box-shadow: 0 18px 40px rgba(0, 0, 0, 0.24);
+            margin: 28px 16px;
             width: 100%;
-            max-width: 400px;
-            text-align: center;
+            max-width: 940px;
+            text-align: left;
             position: relative;
+            box-sizing: border-box;
+        }
+
+        .lobby-header {
+            max-width: 680px;
+            padding-right: 150px;
+        }
+
+        .lobby-header h2 {
+            margin: 0 0 8px;
+            font-size: 28px;
+            color: var(--ink);
+        }
+
+        .lobby-header p {
+            margin: 0 0 22px;
+            color: var(--muted);
+            line-height: 1.5;
+        }
+
+        .lobby-grid {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 18px;
+            align-items: stretch;
+        }
+
+        .lobby-section {
+            border: 1px solid var(--line);
+            border-radius: 8px;
+            padding: 18px;
+            background: white;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+
+        .lobby-section h3 {
+            margin: 0;
+            font-size: 18px;
+        }
+
+        .lobby-section p {
+            margin: 0 0 4px;
+            color: var(--muted);
+            line-height: 1.4;
+            font-size: 14px;
+        }
+
+        .field-label {
+            display: block;
+            margin-top: 6px;
+            font-size: 13px;
+            color: var(--muted);
+            font-weight: 700;
+        }
+
+        .variant-option {
+            margin-top: 8px;
+            text-align: left;
+            color: var(--muted);
+            font-size: 14px;
+        }
+
+        .variant-option label {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            cursor: pointer;
+        }
+
+        .lobby-links {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            margin-top: 18px;
+            align-items: center;
+        }
+
+        .text-link {
+            color: #176c3a;
+            text-decoration: none;
+            font-weight: 800;
+        }
+
+        .text-link:hover {
+            text-decoration: underline;
         }
 
         .coffee-button {
@@ -79,28 +180,34 @@
             display: block;
             width: 100%;
             padding: 12px;
-            margin: 10px 0;
-            border: 1px solid #ddd;
+            margin: 6px 0 2px;
+            border: 1px solid var(--line);
             border-radius: 6px;
             box-sizing: border-box;
             font-size: 16px;
+            background: #fbfbf8;
+        }
+
+        #lobby input[type="checkbox"] {
+            width: auto;
+            margin: 0;
         }
 
         #lobby button {
-            background-color: #4CAF50;
+            background-color: #176c3a;
             color: white;
             padding: 12px 20px;
             border: none;
             border-radius: 6px;
             cursor: pointer;
-            font-size: 18px;
+            font-size: 16px;
             width: 100%;
-            margin-top: 20px;
+            margin-top: auto;
             font-weight: bold;
         }
 
         #lobby button:hover {
-            background-color: #45a049;
+            background-color: #0f512b;
         }
 
         #status {
@@ -113,11 +220,11 @@
         #game-board {
             width: 100%;
             max-width: 1200px;
-            padding: 20px;
+            padding: 16px;
             box-sizing: border-box;
             display: flex;
             flex-direction: column;
-            gap: 20px;
+            gap: 12px;
             min-height: 100vh;
         }
 
@@ -722,17 +829,17 @@
         }
 
         #room-info {
-            background-color: #1b5e20;
-            /* Dark green header */
+            background-color: rgba(12, 47, 30, 0.94);
             color: white;
-            padding: 10px 20px;
-            border-radius: 4px;
+            padding: 12px 16px;
+            border-radius: 8px;
             display: flex;
             justify-content: space-between;
             align-items: center;
             width: 100%;
             box-sizing: border-box;
-            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+            box-shadow: 0 10px 24px rgba(0, 0, 0, 0.18);
+            gap: 12px;
         }
 
         #room-id-display {
@@ -745,13 +852,14 @@
         }
 
         #copy-room-id {
-            background-color: rgba(255, 255, 255, 0.2);
+            background-color: rgba(255, 255, 255, 0.16);
             color: white;
             border: 1px solid rgba(255, 255, 255, 0.4);
-            padding: 6px 12px;
-            border-radius: 4px;
+            padding: 8px 12px;
+            border-radius: 6px;
             cursor: pointer;
             font-size: 14px;
+            font-weight: 700;
         }
 
         #copy-room-id:hover {
@@ -760,14 +868,13 @@
 
         #player-list {
             background-color: white;
-            /* White box */
             color: #333;
-            padding: 10px 20px;
-            border-radius: 4px;
+            padding: 10px 16px;
+            border-radius: 8px;
             margin: 0;
             width: 100%;
             box-sizing: border-box;
-            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+            box-shadow: 0 8px 20px rgba(0, 0, 0, 0.12);
         }
 
         #player-list h3 {
@@ -799,11 +906,11 @@
         #action-feed {
             background-color: rgba(255, 255, 255, 0.94);
             color: #263238;
-            padding: 10px 20px;
-            border-radius: 4px;
+            padding: 10px 16px;
+            border-radius: 8px;
             width: 100%;
             box-sizing: border-box;
-            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+            box-shadow: 0 8px 20px rgba(0, 0, 0, 0.12);
         }
 
         #action-feed h3 {
@@ -894,7 +1001,7 @@
         #opponents-hands {
             flex: 0 0 auto;
             padding: 10px;
-            background: rgba(0, 0, 0, 0.1);
+            background: rgba(0, 0, 0, 0.14);
             border-radius: 8px;
             margin-bottom: 10px;
             overflow-x: auto;
@@ -921,15 +1028,16 @@
             gap: 20px;
             padding: 10px;
             min-height: auto;
-            /* Ensure space */
         }
 
         /* My Hand (Bottom) */
         #my-hand {
             flex: 0 0 auto;
-            padding: 10px;
-            background: rgba(0, 0, 0, 0.2);
-            border-radius: 12px 12px 0 0;
+            padding: 12px;
+            background: rgba(10, 34, 24, 0.68);
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            border-radius: 8px;
+            box-shadow: 0 18px 35px rgba(0, 0, 0, 0.22);
         }
 
         /* Fix Peek Visuals: Add padding to opponent cards and match player cards exactly */
@@ -1018,15 +1126,51 @@
             flex-wrap: wrap;
         }
 
+        .admin-control {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            color: white;
+            cursor: pointer;
+            font-size: 14px;
+            white-space: nowrap;
+        }
+
+        .help-dot {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 18px;
+            height: 18px;
+            border-radius: 50%;
+            background: rgba(255, 255, 255, 0.18);
+            border: 1px solid rgba(255, 255, 255, 0.35);
+            color: white;
+            font-size: 12px;
+            font-weight: 800;
+        }
+
+        .room-actions {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .panel-note {
+            margin: 8px 0 0;
+            color: var(--muted);
+            font-size: 13px;
+        }
+
         @media (max-width: 768px) {
             :root {
-                --player-card-width: 70px;
-                --player-card-height: 98px;
-                --player-card-gap: 8px;
+                --player-card-width: 78px;
+                --player-card-height: 110px;
+                --player-card-gap: 7px;
                 --player-corner-size: 14px;
-                --player-center-size: 32px;
-                --opponent-card-width: 42px;
-                --opponent-card-height: 60px;
+                --player-center-size: 34px;
+                --opponent-card-width: 48px;
+                --opponent-card-height: 68px;
                 --opponent-card-gap: 3px;
                 --opponent-corner-size: 9px;
                 --opponent-center-size: 18px;
@@ -1037,22 +1181,22 @@
             }
 
             body.in-game {
-                overflow: hidden;
+                overflow: auto;
             }
 
             #game-board {
                 max-width: none;
                 min-height: 100dvh;
-                height: 100dvh;
+                height: auto;
                 padding: 8px;
                 gap: 10px;
             }
 
             #game-container {
-                min-height: 100%;
-                height: 100%;
+                min-height: 100dvh;
+                height: auto;
                 gap: 8px;
-                overflow: hidden;
+                overflow: visible;
             }
 
             #sidebar {
@@ -1081,6 +1225,12 @@
             #copy-room-id {
                 padding: 6px 10px;
                 font-size: 12px;
+            }
+
+            .room-actions {
+                margin-left: 0;
+                width: 100%;
+                justify-content: space-between;
             }
 
             #player-list {
@@ -1125,14 +1275,14 @@
 
             #main-content {
                 min-height: 0;
-                overflow: hidden;
+                overflow: visible;
             }
 
             .game-area {
                 min-height: 0;
-                height: 100%;
+                height: auto;
                 display: grid;
-                grid-template-rows: minmax(0, 1fr) auto auto;
+                grid-template-rows: auto auto auto;
                 gap: 10px;
                 padding: 0;
             }
@@ -1142,7 +1292,7 @@
                 min-height: 0;
                 padding: 0;
                 background: radial-gradient(circle at center, rgba(255, 255, 255, 0.14), rgba(0, 0, 0, 0.08));
-                overflow: hidden;
+                overflow-x: auto;
             }
 
             #opponents-hands h3 {
@@ -1151,25 +1301,28 @@
 
             #opponents-container {
                 width: 100%;
-                height: 100%;
+                height: auto;
                 min-height: 0;
-                padding: 4px 0 0;
-                position: relative;
+                padding: 4px 0 6px;
+                position: static;
                 justify-content: unset;
                 align-content: stretch;
-                overflow: hidden;
+                overflow: visible;
             }
 
             #opponents-container[data-layout="table"] {
-                display: block;
+                display: flex;
+                justify-content: flex-start;
+                gap: 8px;
             }
 
             #opponents-container[data-layout="table"] .opponent-hand {
-                position: absolute;
+                position: static;
                 width: min(38vw, 148px);
                 margin: 0;
                 padding: 6px 4px;
                 gap: 4px;
+                flex: 0 0 auto;
             }
 
             #opponents-container[data-layout="grid"] {
@@ -1186,31 +1339,31 @@
             }
 
             .seat-top-left {
-                top: 6px;
-                left: 0;
+                top: auto;
+                left: auto;
             }
 
             .seat-top-center {
-                top: 0;
-                left: 50%;
-                transform: translateX(-50%);
+                top: auto;
+                left: auto;
+                transform: none;
             }
 
             .seat-top-right {
-                top: 6px;
-                right: 0;
+                top: auto;
+                right: auto;
             }
 
             .seat-left-middle {
-                top: 40%;
-                left: 0;
-                transform: translateY(-50%);
+                top: auto;
+                left: auto;
+                transform: none;
             }
 
             .seat-right-middle {
-                top: 40%;
-                right: 0;
-                transform: translateY(-50%);
+                top: auto;
+                right: auto;
+                transform: none;
             }
 
             .opponent-hand {
@@ -1262,6 +1415,9 @@
 
             #my-hand {
                 padding: 10px 8px 12px;
+                position: sticky;
+                bottom: 0;
+                z-index: 20;
             }
 
             #my-hand h3 {
@@ -1293,6 +1449,9 @@
 
             #card-container {
                 margin-top: 10px;
+                overflow-x: auto;
+                justify-content: start;
+                padding-bottom: 4px;
             }
 
             #notifications {
@@ -1302,6 +1461,28 @@
                 width: auto;
                 max-height: 35dvh;
             }
+
+            #lobby {
+                margin: 14px 10px;
+                padding: 18px;
+            }
+
+            .lobby-header {
+                padding-right: 0;
+            }
+
+            .lobby-header h2 {
+                font-size: 24px;
+            }
+
+            .lobby-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .coffee-button {
+                position: static;
+                display: inline-block;
+            }
         }
     </style>
 </head>
@@ -1309,32 +1490,49 @@
 <body>
     <h1>Cambio Card Game</h1>
     <div id="lobby">
-        <h2 style="margin-top:0;">Join / Create Game</h2>
-        <input id="username" placeholder="Enter username" type="text" />
-        <input id="room-id" placeholder="Join code (leave blank to create)" type="text" />
-        <label for="hand-size-select" style="display:block; margin-top:10px; font-size:14px; color:#666;">Starting Hand
-            Size (for new rooms):</label>
-        <select id="hand-size-select">
-            <option selected="" value="4">4 Cards</option>
-            <option value="6">6 Cards</option>
-            <option value="8">8 Cards</option>
-        </select>
-        <label for="num-decks-select" style="display:block; margin-top:10px; font-size:14px; color:#666;">Number of
-            Decks (for new rooms):</label>
-        <select id="num-decks-select">
-            <option selected="" value="1">1 Deck (Standard)</option>
-            <option value="2">2 Decks (For &gt;4 Players)</option>
-        </select>
-        <div style="margin-top: 10px; text-align: left; padding: 0 10px;">
-            <label style="font-size: 14px; color: #666; cursor: pointer; display: flex; align-items: center;">
-                <input id="red-king-variant" style="width: auto; margin-right: 8px;" type="checkbox" />
-                Red King = -2 (Variant)
-            </label>
+        <div class="lobby-header">
+            <h2>Play Cambio Online</h2>
+            <p>Create a private table, share the join code, and play the memory card game with friends.</p>
         </div>
-        <button onclick="handleJoin()" style="margin-top:15px;">Join Game</button>
-        <a href="/instructions"
-            style="display:block; margin-top:10px; color:#4CAF50; text-decoration:none; font-weight:bold;"
-            target="_blank">How to Play</a>
+        <div class="lobby-grid">
+            <section class="lobby-section">
+                <h3>Create Room</h3>
+                <p>Start a new table and invite players with your room code.</p>
+                <label class="field-label" for="username">Your name</label>
+                <input id="username" autocomplete="nickname" placeholder="Kai" type="text" />
+                <label class="field-label" for="hand-size-select">Starting hand</label>
+                <select id="hand-size-select">
+                    <option selected="" value="4">4 Cards</option>
+                    <option value="6">6 Cards</option>
+                    <option value="8">8 Cards</option>
+                </select>
+                <label class="field-label" for="num-decks-select">Decks</label>
+                <select id="num-decks-select">
+                    <option selected="" value="1">1 Deck (Standard)</option>
+                    <option value="2">2 Decks (For larger games)</option>
+                </select>
+                <div class="variant-option">
+                    <label>
+                        <input id="red-king-variant" type="checkbox" />
+                        Red King = -2 variant
+                    </label>
+                </div>
+                <button onclick="handleCreateRoom()">Create Room</button>
+            </section>
+            <section class="lobby-section">
+                <h3>Join Room</h3>
+                <p>Already have a code? Enter your name and jump into that table.</p>
+                <label class="field-label" for="join-username">Your name</label>
+                <input id="join-username" autocomplete="nickname" placeholder="Kai" type="text" />
+                <label class="field-label" for="room-id">Join code</label>
+                <input id="room-id" autocomplete="off" inputmode="text" placeholder="ABC123" type="text" />
+                <button onclick="handleJoinRoom()">Join Room</button>
+            </section>
+        </div>
+        <div class="lobby-links">
+            <a href="/instructions" class="text-link" target="_blank">How to Play</a>
+            <a href="/static/rules.pdf" class="text-link" target="_blank">PDF Rules</a>
+        </div>
         <a class="coffee-button" href="https://buy.stripe.com/14A6oJ0KJcPg2nYb14dwc01" target="_blank">Buy me a coffee
             ☕</a>
         <p id="status"></p>
@@ -1344,14 +1542,15 @@
             <div id="sidebar">
                 <div id="room-info">
                     <div class="room-meta">
-                        <strong>Join Code:</strong> <span id="room-id-display">-</span>
+                        <strong>Room Code:</strong> <span id="room-id-display">-</span>
                         <span class="room-share-hint" style="margin-left: 15px; font-size: 14px;">Share this code with other players to join your
                             game</span>
                     </div>
-                    <button id="copy-room-id" onclick="copyRoomId()">Copy Room ID</button>
-                    <div style="margin-left: 20px;">
-                        <label style="color: white; cursor: pointer;">
+                    <div class="room-actions">
+                        <button id="copy-room-id" onclick="copyRoomId()">Copy Code</button>
+                        <label class="admin-control" title="Reveals all cards on this device only. Useful for testing, not regular play.">
                             <input id="admin-mode-toggle" onchange="toggleAdminMode()" type="checkbox" /> Admin Mode
+                            <span class="help-dot" aria-label="Admin Mode reveals all cards on this device only.">?</span>
                         </label>
                     </div>
                 </div>
@@ -1420,6 +1619,9 @@
                     onclick="document.getElementById('game-over-modal').style.display='none'">×</span>
                 <h2 id="game-over-title">Game Over!</h2>
                 <div id="game-over-results"></div>
+                <button id="share-results-btn" onclick="shareGameResult()"
+                    style="background-color: #2563eb; padding: 15px 24px; font-size: 18px; color: white; border: none; border-radius: 8px; cursor: pointer; margin-top: 20px; margin-right: 8px;">Share
+                    Result</button>
                 <button id="modal-play-again-btn" onclick="playAgain()"
                     style="background-color: #4CAF50; padding: 15px 30px; font-size: 18px; color: white; border: none; border-radius: 8px; cursor: pointer; margin-top: 20px;">Play
                     Again</button>

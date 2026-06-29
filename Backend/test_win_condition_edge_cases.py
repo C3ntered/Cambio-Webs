@@ -28,9 +28,12 @@ sys.modules["fastapi.staticfiles"] = MagicMock()
 sys.modules["fastapi.responses"] = MagicMock()
 
 # Import the actual classes after mocking
-from Backend.backend import GameRoomManager, Room, Player, GameState, GameStatus
+from Backend.backend import Card, GameRoomManager, Room, Player, GameState, GameStatus
 
 # --- TESTS ---
+
+def sample_card(rank="Ace", suit="Spades"):
+    return Card(rank=rank, suit=suit)
 
 def test_check_win_condition_non_existent_room():
     """Verify that checking a non-existent room returns None."""
@@ -58,8 +61,8 @@ def test_check_win_condition_no_winner_yet():
     manager = GameRoomManager()
     room_id = "test_room_active"
 
-    player1 = Player(player_id="p1", username="user1", hand=[MagicMock(), MagicMock()])
-    player2 = Player(player_id="p2", username="user2", hand=[MagicMock(), MagicMock()])
+    player1 = Player(player_id="p1", username="user1", hand=[sample_card(), sample_card("2")])
+    player2 = Player(player_id="p2", username="user2", hand=[sample_card("3"), sample_card("4")])
 
     room = Room(
         room_id=room_id,
@@ -77,7 +80,7 @@ def test_check_win_condition_player_wins():
     manager = GameRoomManager()
     room_id = "test_room_winner"
 
-    player1 = Player(player_id="p1", username="user1", hand=[MagicMock(), MagicMock()])
+    player1 = Player(player_id="p1", username="user1", hand=[sample_card(), sample_card("2")])
     player2 = Player(player_id="p2", username="user2", hand=[None, None]) # Empty hand
 
     room = Room(

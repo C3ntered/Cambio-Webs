@@ -1,4 +1,5 @@
-// By Kai Holland, Last Edits: 3/10/2026
+// By Kai Holland, Last Edits: 6/28/2026
+// Assisted by ChatGPT for code generation and optimization
 const GAME_STATUS = {
     WAITING: 'waiting',
     PLAYING: 'playing',
@@ -1591,6 +1592,78 @@ async function handleJoin() {
     }
 }
 
+async function handleCreateRoom() {
+    const usernameInput = document.getElementById('username');
+    const username = usernameInput ? usernameInput.value.trim() : '';
+    if (!username) {
+        alert('Enter your name before creating a room.');
+        usernameInput?.focus();
+        return;
+    }
+
+    try {
+        await joinGame(username, null);
+        updateStatus(`Created room ${playerContext.roomId}`);
+    } catch (error) {
+        alert(error.message);
+    }
+}
+
+async function handleJoinRoom() {
+    const usernameInput = document.getElementById('join-username');
+    const roomInput = document.getElementById('room-id');
+    const fallbackUsernameInput = document.getElementById('username');
+    const username = usernameInput ? usernameInput.value.trim() : '';
+    const roomId = roomInput ? roomInput.value.trim() : '';
+
+    if (!username) {
+        alert('Enter your name before joining a room.');
+        usernameInput?.focus();
+        return;
+    }
+    if (!roomId) {
+        alert('Enter the room code you were given.');
+        roomInput?.focus();
+        return;
+    }
+    if (fallbackUsernameInput && !fallbackUsernameInput.value.trim()) {
+        fallbackUsernameInput.value = username;
+    }
+
+    try {
+        await joinGame(username, roomId);
+        updateStatus(`Joined room ${playerContext.roomId}`);
+    } catch (error) {
+        alert(error.message);
+    }
+}
+
+function shareGameResult() {
+    const room = latestRoomState;
+    if (!room?.players?.length) return;
+
+    const sortedPlayers = [...room.players].sort((a, b) => a.score - b.score);
+    const winner = sortedPlayers[0];
+    const standings = sortedPlayers
+        .map((player, index) => `${index + 1}. ${player.username}: ${player.score}`)
+        .join('\n');
+    const text = `Cambio results${winner ? ` - ${winner.username} won!` : ''}\n${standings}`;
+
+    if (navigator.share) {
+        navigator.share({ title: 'Cambio results', text }).catch(() => {});
+        return;
+    }
+
+    if (navigator.clipboard?.writeText) {
+        navigator.clipboard.writeText(text)
+            .then(() => notify('Results copied to clipboard.'))
+            .catch(() => prompt('Copy results:', text));
+        return;
+    }
+
+    prompt('Copy results:', text);
+}
+
 let gracePeriodTimer = null;
 
 function startGracePeriodCountdown(seconds) {
@@ -1623,6 +1696,8 @@ function tallyScores() {
 window.tallyScores = tallyScores;
 window.joinGame = joinGame;
 window.handleJoin = handleJoin;
+window.handleCreateRoom = handleCreateRoom;
+window.handleJoinRoom = handleJoinRoom;
 window.drawCard = drawCard;
 window.drawFromDiscard = drawFromDiscard;
 window.playCard = playCard;
@@ -1632,6 +1707,7 @@ window.callCambio = callCambio;
 window.copyRoomId = copyRoomId;
 window.startGame = startGame;
 window.playAgain = playAgain;
+window.shareGameResult = shareGameResult;
 window.skipAbility = skipAbility;
 window.toggleAdminMode = toggleAdminMode;
 

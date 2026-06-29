@@ -3,7 +3,8 @@ Cambio Card Game Backend
 FastAPI backend with WebSocket support for real-time multiplayer gameplay
 
 By Kai Holland
-Last Edits: 3/10/2026
+Assisted by ChatGPT for code generation and optimization
+Last Edits: 6/28/2026
 """
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Response
@@ -1793,6 +1794,10 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
                 top_card = room.game_state.discard_pile[-1]
                 target_card = target_player.hand[target_index]
 
+                if target_id != player_id and player.hand[replacement_index] is None:
+                    await websocket.send_json({"type": "error", "message": "Cannot replace with an empty slot"})
+                    continue
+
                 if target_card.rank != top_card.rank:
                     # Wrong guess - penalty: draw a card and end turn
                     ok = await room_manager.apply_penalty_draw(room_id, player, websocket)
@@ -1824,10 +1829,6 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
                 
                 msg_extra = ""
                 if target_id != player_id:
-                    if player.hand[replacement_index] is None:
-                        await websocket.send_json({"type": "error", "message": "Cannot replace with an empty slot"})
-                        continue
-
                     replacement_card = player.hand[replacement_index]
                     player.hand[replacement_index] = None
                     target_player.hand[target_index] = replacement_card
