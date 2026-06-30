@@ -1,10 +1,17 @@
 """
-Cambio Card Game Backend
-FastAPI backend with WebSocket support for real-time multiplayer gameplay
+Cambio Card Game backend.
 
-By Kai Holland
-Assisted by ChatGPT for code generation and optimization
-Last Edits: 6/28/2026
+This module owns the FastAPI application, REST endpoints, WebSocket message
+handler, in-memory room manager, card/deck helpers, cleanup timers, and the
+single-player practice bot for Cambio.
+
+Author: Kai Holland
+AI assistance and co-authoring:
+    - OpenAI ChatGPT/Codex: code generation, optimization, documentation, and
+      implementation assistance.
+    - Anthropic Claude: debugging assistance.
+    - Google Jules: substantial authorship of Frontend/bridge.js.
+Last updated: 2026-06-30
 """
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Response
@@ -33,7 +40,12 @@ secure_random = secrets.SystemRandom()
 @asynccontextmanager
 async def lifespan(app):
     """
-    Start background tasks on startup; cancel on shutdown.
+    Run application-level background tasks for the FastAPI process.
+
+    The backend stores rooms in memory, so periodic cleanup is important for
+    keeping RAM usage bounded on small hosting instances. A second loop handles
+    short-lived game timers such as grace-period scoring and optional turn
+    timeouts.
     """
     async def _cleanup_loop():
         while True:
@@ -178,7 +190,11 @@ app.mount("/static", StaticFiles(directory=frontend_dir), name="static")
 # ============================================================================
 class GameStatus(str, Enum):
     """
-    Enum for game status.
+    Lifecycle states for a room.
+
+    WAITING rooms are lobbies, PLAYING rooms have an active round, GRACE_PERIOD
+    rooms are resolving final eliminations before scoring, and FINISHED rooms
+    have a winner but may still be reused for another round.
     """
     WAITING = "waiting"
     PLAYING = "playing"
@@ -187,7 +203,10 @@ class GameStatus(str, Enum):
 
 class Card(BaseModel):
     """
-    Card model for representing a card in the game.
+    A single playing card.
+
+    Suits use human-readable names such as ``"Hearts"``. Jokers are represented
+    with both ``suit`` and ``rank`` set to ``"Joker"``.
     """
     suit: str
     rank: str
@@ -197,7 +216,11 @@ class Card(BaseModel):
 
 class Player(BaseModel):
     """
-    Player model for representing a player in the game.
+    A human or bot participant in a room.
+
+    ``hand`` keeps card slots as either ``Card`` or ``None``. A ``None`` slot is
+    an eliminated card position, which preserves board layout while still
+    counting as gone for win-condition checks.
     """
     player_id: str
     username: str
@@ -213,7 +236,11 @@ class Player(BaseModel):
 
 class GameState(BaseModel):
     """
-    GameState model for representing the state of a game.
+    Round-specific state for a room.
+
+    This object is reset between rounds. It tracks the active deck, discard
+    pile, current turn, viewing phase, final-round Cambio state, and optional
+    turn-timer start time.
     """
     current_turn: Optional[str] = None  # player_id
     deck: List[Card] = []
@@ -229,7 +256,11 @@ class GameState(BaseModel):
 
 class Room(BaseModel):
     """
-    Room model for representing a room in the game.
+    A complete game room, including players, settings, and round state.
+
+    Rooms are stored in memory by ``GameRoomManager``. ``last_activity`` drives
+    stale-room cleanup, while ``turn_timer_*`` controls the optional 60-second
+    AFK turn protection.
     """
     model_config = ConfigDict(arbitrary_types_allowed=True)
     
@@ -251,7 +282,11 @@ class Room(BaseModel):
 
 class CreateRoomRequest(BaseModel):
     """
-    CreateRoomRequest model for representing a request to create a room.
+    Payload for creating a new room.
+
+    The creator is added as the first player. ``play_with_bot`` creates a
+    practice lobby immediately, and ``turn_timer_enabled`` enables the optional
+    60-second timeout for the room.
     """
     username: str
     max_players: int = 4
@@ -263,19 +298,22 @@ class CreateRoomRequest(BaseModel):
 
 class JoinRoomRequest(BaseModel):
     """
-    JoinRoomRequest model for representing a request to join a room.
+    Payload for joining an existing room.
     """
     username: str
 
 class AddBotRequest(BaseModel):
     """
-    AddBotRequest model for adding a practice opponent to a lobby.
+    Payload for adding one practice bot to a waiting room.
     """
     bot_name: str = "Cambio Bot"
 
 class UpdateRoomSettingsRequest(BaseModel):
     """
-    UpdateRoomSettingsRequest model for changing lobby settings between rounds.
+    Payload for changing room settings while a room is waiting or finished.
+
+    Mid-round settings changes are rejected so that all clients share one stable
+    ruleset for the active round.
     """
     initial_hand_size: Optional[int] = None
     num_decks: Optional[int] = None
@@ -335,20 +373,26 @@ def get_card_ability(card: Card) -> Optional[str]:
 
 class GameRoomManager:
     """
-    GameRoomManager class for managing game rooms.
+    In-memory coordinator for rooms, players, sockets, timers, and bots.
+
+    The app does not use a database; active rooms live in this manager until a
+    cleanup policy removes them. Public methods either mutate room state
+    directly or broadcast changes to connected clients.
     """
     def __init__(self):
-        """Initialize the GameRoomManager."""
+        """Initialize empty room, socket, and bot-task registries."""
         self.rooms: Dict[str, Room] = {}
         self.room_connections: Dict[str, Dict[str, WebSocket]] = {}  # room_id -> {player_id -> websocket}
         self.bot_turn_tasks: Dict[str, asyncio.Task] = {}
 
     def _normalize_room_id(self, room_id: str) -> str:
+        """Return a canonical uppercase room code, or an empty string."""
         if not room_id:
             return ""
         return str(room_id).strip().upper()
 
     def _resolve_room_id(self, room_id: str) -> Optional[str]:
+        """Resolve user-entered room codes against active room IDs."""
         normalized = self._normalize_room_id(room_id)
         if not normalized:
             return None
@@ -360,6 +404,7 @@ class GameRoomManager:
         return normalized
 
     def _generate_room_code(self) -> str:
+        """Generate a unique six-character room code."""
         alphabet = string.ascii_uppercase + string.digits
         while True:
             room_id = ''.join(secure_random.choice(alphabet) for _ in range(6))
@@ -376,7 +421,12 @@ class GameRoomManager:
         play_with_bot: bool = False,
         turn_timer_enabled: bool = False
     ) -> Room:
-        """Create a new game room"""
+        """
+        Create a waiting room and add the creator as the first player.
+
+        If ``play_with_bot`` is true, a practice bot is also added immediately.
+        Deck count defaults to two decks for larger maximum player counts.
+        """
         room_id = self._generate_room_code()
         player_id = str(uuid.uuid4())[:8]
         
@@ -414,7 +464,11 @@ class GameRoomManager:
 
     def add_bot_to_room(self, room_id: str, bot_name: str = "Cambio Bot") -> tuple[Room, str]:
         """
-        Add a simple AI player to a waiting room.
+        Add one practice bot to a waiting room.
+
+        A room may only have one bot. Bots are modeled as players so the normal
+        dealing, turn, scoring, and cleanup logic can treat them like any other
+        participant where possible.
         """
         resolved_room_id = self._resolve_room_id(room_id)
         if not resolved_room_id or resolved_room_id not in self.rooms:
@@ -451,7 +505,10 @@ class GameRoomManager:
     
     def join_room(self, room_id: str, username: str) -> tuple[Room, str]:
         """
-        Join an existing room, returns (room, player_id)
+        Add a human player to an existing waiting or finished room.
+
+        Returns the updated room plus the new player ID needed for the WebSocket
+        join handshake.
         """
         resolved_room_id = self._resolve_room_id(room_id)
         if not resolved_room_id or resolved_room_id not in self.rooms:
@@ -486,7 +543,10 @@ class GameRoomManager:
         turn_timer_enabled: Optional[bool] = None
     ) -> Room:
         """
-        Update room settings while the room is in a lobby state.
+        Update room settings while the room is between active rounds.
+
+        Only waiting and finished rooms can be changed. Active rounds reject
+        settings changes to avoid clients disagreeing about rules mid-game.
         """
         resolved_room_id = self._resolve_room_id(room_id)
         if not resolved_room_id or resolved_room_id not in self.rooms:
@@ -514,7 +574,10 @@ class GameRoomManager:
 
     def remove_player_from_room(self, room_id: str, player_id: str) -> tuple[Optional[Room], Optional[Player], bool]:
         """
-        Remove a player from a lobby or finished room. Returns room, player, deleted_room.
+        Remove a player from a lobby or finished room.
+
+        Returns ``(room, player, deleted_room)``. If the last player leaves, the
+        room and socket registry are deleted immediately.
         """
         resolved_room_id = self._resolve_room_id(room_id)
         if not resolved_room_id or resolved_room_id not in self.rooms:
@@ -543,7 +606,10 @@ class GameRoomManager:
     
     def start_game(self, room_id: str):
         """
-        Start the game in a room
+        Deal cards and move a waiting room into its viewing phase.
+
+        The method also auto-upgrades to two decks if the configured deal would
+        consume too much of one 54-card deck.
         """
         resolved_room_id = self._resolve_room_id(room_id)
         if not resolved_room_id or resolved_room_id not in self.rooms:
@@ -608,7 +674,9 @@ class GameRoomManager:
     
     def create_deck(self, num_decks: int = 1) -> List[Card]:
         """
-        Create one or more standard 54-card decks (52 cards + 2 Jokers per deck)
+        Create one or more standard 54-card decks.
+
+        Each deck contains 52 suited cards plus two Jokers.
         """
         deck = []
         # Create the specified number of decks
@@ -625,7 +693,7 @@ class GameRoomManager:
     
     def reshuffle_deck(self, room_id: str):
         """
-        Reshuffle the discard pile (except the last card) back into the deck
+        Recycle the discard pile into the deck while preserving the top discard.
         """
         resolved_room_id = self._resolve_room_id(room_id)
         if not resolved_room_id or resolved_room_id not in self.rooms:
@@ -652,7 +720,7 @@ class GameRoomManager:
     
     def get_room(self, room_id: str) -> Optional[Room]:
         """
-        Get room by ID
+        Return a room by code after applying normal room-code normalization.
         """
         resolved_room_id = self._resolve_room_id(room_id)
         if not resolved_room_id:
@@ -664,7 +732,7 @@ class GameRoomManager:
     
     def add_connection(self, room_id: str, player_id: str, websocket: WebSocket):
         """
-        Add WebSocket connection for a player
+        Register a player's active WebSocket connection.
         """
         resolved_room_id = self._resolve_room_id(room_id)
         if not resolved_room_id:
@@ -675,7 +743,7 @@ class GameRoomManager:
     
     def remove_connection(self, room_id: str, player_id: str):
         """
-        Remove WebSocket connection for a player
+        Remove a player's active WebSocket connection, if present.
         """
         resolved_room_id = self._resolve_room_id(room_id)
         if not resolved_room_id:
@@ -685,7 +753,7 @@ class GameRoomManager:
 
     def touch_room(self, room_id: str):
         """
-        Update last_activity timestamp for a room.
+        Mark a room as recently active for cleanup-timeout purposes.
         """
         resolved_room_id = self._resolve_room_id(room_id)
         if not resolved_room_id:
@@ -754,7 +822,11 @@ class GameRoomManager:
     
     async def broadcast_to_room(self, room_id: str, message: dict, exclude_player: Optional[str] = None):
         """
-        Broadcast message to all players in a room
+        Send a WebSocket message to every connected player in a room.
+
+        Broken sockets are removed after send failures. ``exclude_player`` is
+        used for private action results where the acting player already received
+        a more detailed response.
         """
         resolved_room_id = self._resolve_room_id(room_id)
         if not resolved_room_id or resolved_room_id not in self.room_connections:
@@ -786,7 +858,7 @@ class GameRoomManager:
 
     async def send_to_player(self, room_id: str, player_id: str, message: dict):
         """
-        Send a private websocket message to a single player.
+        Send a private WebSocket message to one player.
         """
         resolved_room_id = self._resolve_room_id(room_id)
         websocket = self.room_connections.get(resolved_room_id, {}).get(player_id)
@@ -798,7 +870,7 @@ class GameRoomManager:
     
     def check_win_condition(self, room_id: str) -> Optional[str]:
         """
-        Check if any player has won (empty hand, all None). Returns winner player_id or None
+        Return the first player whose remaining card slots are all eliminated.
         """
         resolved_room_id = self._resolve_room_id(room_id)
         if not resolved_room_id or resolved_room_id not in self.rooms:
@@ -813,7 +885,7 @@ class GameRoomManager:
     
     def end_game(self, room_id: str, winner_id: str):
         """
-        End the game and set winner
+        Mark a room as finished and remember the winner for the next round.
         """
         resolved_room_id = self._resolve_room_id(room_id)
         if not resolved_room_id or resolved_room_id not in self.rooms:
@@ -828,7 +900,7 @@ class GameRoomManager:
     
     def start_grace_period(self, room_id: str):
         """
-        Transition room to grace period state
+        Move a room into the short post-final-round elimination window.
         """
         resolved_room_id = self._resolve_room_id(room_id)
         if not resolved_room_id or resolved_room_id not in self.rooms:
@@ -841,7 +913,10 @@ class GameRoomManager:
 
     def tally_scores(self, room_id: str) -> Optional[str]:
         """
-        Finalize scores and end the game (transition from grace period to finished)
+        Score all remaining cards, pick the winner, and finish the room.
+
+        Ties are resolved by lower score, then fewer remaining cards, then
+        whether the player called Cambio.
         """
         resolved_room_id = self._resolve_room_id(room_id)
         room = self.rooms.get(resolved_room_id)
@@ -877,7 +952,10 @@ class GameRoomManager:
 
     def next_turn(self, room_id: str) -> Optional[str]:
         """
-        Move to next player's turn. Returns winner_id if the round ends.
+        Advance ``current_turn`` and update final-round countdown state.
+
+        Returns ``"GRACE_PERIOD"`` when the final round has completed and the
+        room should enter scoring grace period.
         """
         if room_id not in self.rooms:
             return None
@@ -909,14 +987,18 @@ class GameRoomManager:
 
     def finish_round(self, room_id: str) -> Optional[str]:
         """
-        Transition to grace period when round ends.
+        Enter grace period after the final round ends.
         """
         self.start_grace_period(room_id)
         return "GRACE_PERIOD"  # Return special value to indicate transition
 
     async def resolve_card_ability(self, room: Room, acting_player: Player, ability: str, payload: Dict) -> bool:
         """
-        Execute the requested ability if the payload is valid.
+        Validate and execute a discarded-card ability.
+
+        Ability effects use private reveal messages where needed so only the
+        acting player sees peek results. Swap abilities broadcast the final
+        state to every connected client.
         """
         room_id = room.room_id
 
@@ -1120,6 +1202,7 @@ class GameRoomManager:
     async def apply_penalty_draw(self, room_id: str, player: "Player", websocket) -> bool:
         """
         Draw a penalty card for a wrong sacrifice/elimination guess.
+
         Reshuffles the discard pile into the deck if needed.
         Returns True if a card was successfully drawn, False if deck is unrecoverable.
         """
@@ -1147,7 +1230,7 @@ class GameRoomManager:
 
     async def broadcast_grace_period_started(self, room_id: str, message: str = "Grace Period started!"):
         """
-        Broadcast grace_period_started to all players in a room.
+        Broadcast that a room has entered grace period.
         """
         room = self.rooms.get(room_id)
         if room:
@@ -1159,7 +1242,7 @@ class GameRoomManager:
 
     async def broadcast_game_ended(self, room_id: str, winner_id: str):
         """
-        Broadcast game_ended with winner info to all players in a room.
+        Broadcast final scoring results and winner information.
         """
         room = self.rooms.get(room_id)
         if not room:
@@ -1178,7 +1261,7 @@ class GameRoomManager:
 
     def should_auto_advance_turn(self, room: Room, now: datetime) -> bool:
         """
-        Return True when a room's optional turn timer has expired.
+        Return whether the optional turn timer has expired for a room.
         """
         if not room.turn_timer_enabled:
             return False
@@ -1192,6 +1275,7 @@ class GameRoomManager:
         return elapsed >= room.turn_timer_seconds
 
     def _non_empty_card_indices(self, player: Player) -> List[int]:
+        """Return indices for cards that have not been eliminated."""
         return [i for i, card in enumerate(player.hand) if card is not None]
 
     async def _bot_sleep(self, delay_range: tuple[float, float]):
@@ -1289,7 +1373,11 @@ class GameRoomManager:
 
     async def auto_advance_timed_out_turn(self, room_id: str):
         """
-        Resolve a stale turn enough to keep the game moving, then advance.
+        Resolve a timed-out turn enough to keep the room moving.
+
+        Pending deck draws are discarded; pending discard-pile draws are swapped
+        into a random non-empty slot because discard draws cannot be discarded
+        back onto the pile.
         """
         room = self.get_room(room_id)
         if not room or room.status != GameStatus.PLAYING:
@@ -1326,7 +1414,7 @@ class GameRoomManager:
 
     def schedule_bot_turn(self, room_id: str):
         """
-        Schedule the current bot player's turn, if applicable.
+        Queue a bot turn if the current player is a bot and no task is running.
         """
         room = self.get_room(room_id)
         if not room or room.status != GameStatus.PLAYING:
@@ -1482,8 +1570,10 @@ class GameRoomManager:
 
     async def end_turn(self, room_id: str, check_win: bool = False) -> Optional[str]:
         """
-        Advance to the next turn, broadcast turn_ended, and handle grace period / win conditions.
-        Returns winner_id if a win was detected (and check_win=True), else None.
+        Advance to the next player, broadcast state, and schedule bots.
+
+        If ``check_win`` is true, the method checks whether the just-finished
+        action eliminated a player's last card and broadcasts game-end state.
         """
         cambio_result = self.next_turn(room_id)
         room = self.rooms.get(room_id)
@@ -1507,7 +1597,10 @@ class GameRoomManager:
 
 def get_room_dict_for_broadcast(room: Room, hide_pending_for_player: Optional[str] = None) -> dict:
     """
-    Get room as dict for broadcasting. Optionally hide pending_drawn_card for a player (so others don't see their drawn card).
+    Serialize a room for broadcast, optionally hiding one player's pending draw.
+
+    Opponents should know that a player drew a card, but not the identity of a
+    still-pending deck draw.
     """
     d = room.model_dump(mode='json')
     if hide_pending_for_player:
@@ -1527,7 +1620,7 @@ room_manager = GameRoomManager()
 @app.get("/")
 async def root():
     """
-    Serve the main HTML file
+    Serve the main browser client.
     """
     html_path = os.path.join(frontend_dir, "index.html")
     response = await _get_cached_response(html_path, "text/html")
@@ -1538,14 +1631,16 @@ async def root():
 @app.get("/join/{room_id}")
 async def join_page(room_id: str):
     """
-    Serve the main app for direct room links like /join/ABC123.
+    Serve the app shell for shareable join links.
+
+    The frontend reads the room code from the path and pre-fills the join form.
     """
     return await root()
 
 @app.get("/instructions")
 async def instructions():
     """
-    Serve the instructions HTML file
+    Serve the standalone instructions page.
     """
     html_path = os.path.join(frontend_dir, "instructions.html")
     response = await _get_cached_response(html_path, "text/html")
@@ -1556,7 +1651,7 @@ async def instructions():
 @app.post("/api/rooms", response_model=Room)
 async def create_room(request: CreateRoomRequest):
     """
-    Create a new game room
+    Create a new room and return its initial public state.
     """
     room = room_manager.create_room(
         request.username, 
@@ -1572,7 +1667,7 @@ async def create_room(request: CreateRoomRequest):
 @app.get("/api/rooms/{room_id}", response_model=Room)
 async def get_room(room_id: str):
     """
-    Get room status
+    Return the latest state for a room code.
     """
     room = room_manager.get_room(room_id)
     if not room:
@@ -1582,7 +1677,7 @@ async def get_room(room_id: str):
 @app.post("/api/rooms/{room_id}/join")
 async def join_room(room_id: str, request: JoinRoomRequest):
     """
-    Join a room
+    Add a player to a room and return the player's WebSocket identity.
     """
     room_id = room_manager._normalize_room_id(room_id)
     try:
@@ -1599,7 +1694,7 @@ async def join_room(room_id: str, request: JoinRoomRequest):
 @app.post("/api/rooms/{room_id}/bot")
 async def add_bot(room_id: str, request: AddBotRequest):
     """
-    Add a basic AI opponent to a waiting room.
+    Add a basic AI opponent to a waiting room and broadcast the new player.
     """
     room, bot_id = room_manager.add_bot_to_room(room_id, request.bot_name)
     await room_manager.broadcast_to_room(room_id, {
@@ -1615,7 +1710,7 @@ async def add_bot(room_id: str, request: AddBotRequest):
 @app.patch("/api/rooms/{room_id}/settings", response_model=Room)
 async def update_room_settings(room_id: str, request: UpdateRoomSettingsRequest):
     """
-    Update room settings while waiting or between rounds.
+    Update lobby settings while waiting or between rounds.
     """
     room = room_manager.update_room_settings(
         room_id,
@@ -1635,7 +1730,10 @@ async def update_room_settings(room_id: str, request: UpdateRoomSettingsRequest)
 @app.post("/api/rooms/{room_id}/start")
 async def start_room_game(room_id: str):
     """
-    Manually start the game in a room
+    Start a waiting room through the REST API.
+
+    The browser client normally uses WebSocket ``start_game`` messages; this
+    route remains useful for tests and simple API clients.
     """
     room = room_manager.get_room(room_id)
     if not room:
@@ -1666,10 +1764,14 @@ async def start_room_game(room_id: str):
 
 @app.websocket("/ws/{room_id}")
 async def websocket_endpoint(websocket: WebSocket, room_id: str):
+    """
+    Handle real-time game messages for one connected player.
+
+    The first message must be ``{"type": "join", "data": {"player_id": ...}}``.
+    After that, all gameplay actions are validated server-side before the room
+    state is broadcast.
+    """
     room_id = room_manager._normalize_room_id(room_id)
-    """
-    WebSocket endpoint for real-time game communication
-    """
     await websocket.accept()
     
     player_id = None

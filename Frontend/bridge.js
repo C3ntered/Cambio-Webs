@@ -1,5 +1,20 @@
-// By Kai Holland, Last Edits: 6/28/2026
-// Assisted by ChatGPT for code generation and optimization
+/**
+ * Cambio browser client bridge.
+ *
+ * This file connects the static HTML interface to the FastAPI backend through
+ * REST calls and WebSocket messages. It owns lobby actions, room links, live
+ * board rendering, card selection flows, client-side animations, notifications,
+ * and small UI timers.
+ *
+ * Author: Kai Holland
+ * AI assistance and co-authoring:
+ * - Google Jules: wrote most of this bridge file and assisted with game logic.
+ * - OpenAI ChatGPT/Codex: code generation, optimization, documentation, and
+ *   implementation assistance.
+ * - Anthropic Claude: debugging assistance.
+ *
+ * Last updated: 2026-06-30
+ */
 const GAME_STATUS = {
     WAITING: 'waiting',
     PLAYING: 'playing',
@@ -20,8 +35,13 @@ function escapeHTML(str) {
     });
 }
 
-// Auto-detect API base URL from current page location
-// Works when HTML is served via HTTP (recommended) or falls back to localhost for file://
+/**
+ * Auto-detect the backend origin for local development and production.
+ *
+ * The deployed app serves the frontend and backend from the same origin. Local
+ * static-file development may serve HTML from port 8080 or file://, so those
+ * cases are mapped back to the local FastAPI server.
+ */
 const getApiBase = () => {
     // If accessed via file:// protocol, default to localhost
     if (window.location.protocol === 'file:') {
@@ -66,16 +86,28 @@ let activeLookIndicators = {}; // State of cards being looked at
 const actionHistory = [];
 let turnTimerInterval = null;
 
+/**
+ * Build a shareable direct-join URL for a room code.
+ */
 function getJoinUrl(roomId) {
     const normalizedRoomId = String(roomId || '').trim().toUpperCase();
     return `${window.location.origin}/join/${normalizedRoomId}`;
 }
 
+/**
+ * Extract a room code from routes like /join/ABC123.
+ */
 function getRoomIdFromPath() {
     const match = window.location.pathname.match(/^\/join\/([A-Za-z0-9]{6})\/?$/);
     return match ? match[1].toUpperCase() : '';
 }
 
+/**
+ * Create a room or join an existing one, then open the WebSocket connection.
+ *
+ * When roomId is omitted, this creates a new room using the lobby controls.
+ * Passing { playWithBot: true } creates a practice room with one bot opponent.
+ */
 async function joinGame(username, roomId = null, options = {}) {
     if (!username) {
         throw new Error('Username is required');
@@ -147,6 +179,9 @@ async function joinGame(username, roomId = null, options = {}) {
     renderBoard(room, playerId);
 }
 
+/**
+ * Connect to the room WebSocket and identify the current player.
+ */
 function setupWebSocket(roomId, playerId) {
     if (socket) {
         socket.close();
@@ -170,6 +205,9 @@ function setupWebSocket(roomId, playerId) {
     socket.addEventListener('error', () => updateStatus('Connection error'));
 }
 
+/**
+ * Apply server-sent game events to local UI state.
+ */
 function handleSocketMessage(event) {
     const message = JSON.parse(event.data);
     console.log('New Update:', message);
@@ -592,6 +630,9 @@ function handleSocketMessage(event) {
     }
 }
 
+/**
+ * Send a typed gameplay message over the active WebSocket.
+ */
 function sendMessage(type, data = {}) {
     if (!socket || socket.readyState !== WebSocket.OPEN) {
         throw new Error('WebSocket is not connected');
@@ -649,6 +690,10 @@ function drawFromDiscard() {
     sendMessage('draw_from_discard');
 }
 
+/**
+ * Resolve the currently pending draw by either swapping it into the hand or
+ * discarding it back to the pile.
+ */
 function resolveDraw(action, cardIndex) {
     const payload = { action };
     if (action === 'swap' && cardIndex !== undefined) {
@@ -660,6 +705,9 @@ function resolveDraw(action, cardIndex) {
     sendMessage('resolve_draw', payload);
 }
 
+/**
+ * Attempt to eliminate/sacrifice one of the current player's cards.
+ */
 function playCard(card, cardIndex, abilityPayload = null) {
     const payload = { card };
     if (cardIndex !== undefined && cardIndex !== null) {
@@ -671,6 +719,12 @@ function playCard(card, cardIndex, abilityPayload = null) {
     sendMessage('play_card', payload);
 }
 
+/**
+ * Start the two-click opponent elimination flow.
+ *
+ * First click selects the opponent's target card. The next click selects one of
+ * the current player's cards to give as a replacement if the guess is correct.
+ */
 function startElimination(targetPlayerId, cardIndex) {
     eliminationTarget = { pid: targetPlayerId, idx: cardIndex };
     notify("Target selected! Now click one of YOUR cards to give to them.");
@@ -687,6 +741,9 @@ function completeElimination(replacementCardIndex) {
     eliminationTarget = null;
 }
 
+/**
+ * Confirm and send a Cambio call for the current player.
+ */
 function callCambio() {
     if (confirm('Are you sure you want to Call Cambio? This will end your turn and trigger the final round.')) {
         sendMessage('call_cambio');
@@ -738,6 +795,9 @@ function clearPersistentLookIndicators() {
     }
 }
 
+/**
+ * Put the UI into target-selection mode for a discarded-card ability.
+ */
 function startAbilitySelection(ability) {
     selectingTargets = true;
     selectedTargets = [];
@@ -761,6 +821,9 @@ function startAbilitySelection(ability) {
     }
 }
 
+/**
+ * Route a clicked card into the currently active ability-selection flow.
+ */
 function handleCardClick(playerId, cardIndex, isOwnCard) {
     if (!selectingTargets) return;
 
@@ -865,6 +928,13 @@ function getOpponentSeatClass(totalOpponents, opponentIndex) {
     return layout ? layout[opponentIndex] || null : null;
 }
 
+/**
+ * Render the full lobby/game board from the latest server room snapshot.
+ *
+ * This is the main view function. It intentionally derives as much as possible
+ * from server state so reconnects, broadcasts, and animations converge on the
+ * same authoritative room model.
+ */
 function renderBoard(room, yourPlayerId) {
     if (isAnimating) {
         console.log('Skipping render due to animation');
@@ -1432,6 +1502,9 @@ function renderBoard(room, yourPlayerId) {
     applyIndicators();
 }
 
+/**
+ * Stop the local turn countdown interval, if one is active.
+ */
 function clearTurnTimerDisplay() {
     if (turnTimerInterval !== null) {
         clearInterval(turnTimerInterval);
@@ -1439,6 +1512,9 @@ function clearTurnTimerDisplay() {
     }
 }
 
+/**
+ * Render and update the optional turn countdown inside the turn indicator.
+ */
 function startTurnTimerDisplay(room, container) {
     if (!room?.turn_timer_enabled || !room?.game_state?.turn_started_at || room.status?.toLowerCase() !== GAME_STATUS.PLAYING) {
         return;
@@ -1484,6 +1560,9 @@ function getSuitSymbol(suit) {
     }
 }
 
+/**
+ * Render a visible card face into an existing card element.
+ */
 function renderCardContent(element, card) {
     element.innerHTML = '';
 
@@ -1531,6 +1610,9 @@ function renderCardContent(element, card) {
     element.appendChild(bottomDiv);
 }
 
+/**
+ * Add a human-readable event to the local recent-actions feed.
+ */
 function recordAction(text, type = 'info') {
     if (!text) return;
     actionHistory.unshift({
@@ -1566,6 +1648,9 @@ function renderActionFeed() {
     });
 }
 
+/**
+ * Sync the between-round settings panel with the current room state.
+ */
 function renderRoomSettings(room) {
     const panel = document.getElementById('room-settings');
     const handSelect = document.getElementById('game-hand-size-select');
@@ -1608,6 +1693,9 @@ function renderRoomSettings(room) {
     }
 }
 
+/**
+ * Send editable room settings to the backend.
+ */
 function updateRoomSettings() {
     if (!latestRoomState) return;
 
@@ -1628,6 +1716,9 @@ function updateRoomSettings() {
     });
 }
 
+/**
+ * Request a practice bot for the current waiting room.
+ */
 function addBotToRoom() {
     if (!latestRoomState) return;
     sendMessage('add_bot', { bot_name: 'Cambio Bot' });
@@ -1647,6 +1738,9 @@ function leaveRoom() {
     }
 }
 
+/**
+ * Clear local state and return the browser UI to the lobby.
+ */
 function resetToLobby() {
     clearTurnTimerDisplay();
     if (socket) {
@@ -1716,6 +1810,9 @@ function updateStatus(status) {
 //     }
 // }
 
+/**
+ * Copy the full join link for the current room to the clipboard.
+ */
 function copyRoomId() {
     const roomId = playerContext.roomId;
     if (!roomId) {
@@ -1752,6 +1849,9 @@ function copyRoomId() {
     }
 }
 
+/**
+ * Clipboard fallback for browsers that do not support navigator.clipboard.
+ */
 function fallbackCopy(text, onSuccess) {
     const textarea = document.createElement('textarea');
     textarea.value = text;
@@ -1807,6 +1907,9 @@ async function handleCreateRoom() {
     }
 }
 
+/**
+ * Create a new room that includes the practice bot.
+ */
 async function handlePracticeBot() {
     const usernameInput = document.getElementById('username');
     const username = usernameInput ? usernameInput.value.trim() : '';
@@ -1824,6 +1927,9 @@ async function handlePracticeBot() {
     }
 }
 
+/**
+ * Join an existing room from the lobby form or a pre-filled /join/:code link.
+ */
 async function handleJoinRoom() {
     const usernameInput = document.getElementById('join-username');
     const roomInput = document.getElementById('room-id');
@@ -1853,6 +1959,9 @@ async function handleJoinRoom() {
     }
 }
 
+/**
+ * Share or copy the final score summary after a game ends.
+ */
 function shareGameResult() {
     const room = latestRoomState;
     if (!room?.players?.length) return;
@@ -1881,6 +1990,9 @@ function shareGameResult() {
 
 let gracePeriodTimer = null;
 
+/**
+ * Show the short grace-period countdown and tally scores when it expires.
+ */
 function startGracePeriodCountdown(seconds) {
     // Clear any existing timer
     if (gracePeriodTimer !== null) {
@@ -1941,6 +2053,9 @@ window.addEventListener('DOMContentLoaded', () => {
     updateStatus(`Joining room ${linkedRoomId}. Enter your name to continue.`);
 });
 
+/**
+ * Temporarily highlight a card that was swapped or otherwise affected.
+ */
 function highlightCard(pid, idx, duration = 3000) {
     const btn = findCardElement(pid, idx, latestRoomState, playerContext.playerId);
     if (btn) {
@@ -1950,6 +2065,9 @@ function highlightCard(pid, idx, duration = 3000) {
 }
 
 
+/**
+ * Locate a rendered card button for animation and visual indicators.
+ */
 function findCardElement(pid, idx, roomState, myPlayerId) {
     console.log('findCardElement called:', pid, idx, myPlayerId);
 
@@ -1996,6 +2114,9 @@ function findCardElement(pid, idx, roomState, myPlayerId) {
     return null;
 }
 
+/**
+ * Animate two rendered cards trading places.
+ */
 function animateSwap(player1_id, card1_index, player2_id, card2_index, callback) {
     console.log('animateSwap called:', player1_id, card1_index, player2_id, card2_index);
     isAnimating = true;
@@ -2068,6 +2189,9 @@ function animateSwap(player1_id, card1_index, player2_id, card2_index, callback)
     }, 700);
 }
 
+/**
+ * Animate a drawn card moving into a hand slot and the replaced card leaving.
+ */
 function animateDrawSwap(playerId, cardIndex, drawSource, callback) {
     console.log('animateDrawSwap called:', playerId, cardIndex, drawSource);
     isAnimating = true;
@@ -2166,6 +2290,9 @@ function styleFixedClone(clone, rect) {
     clone.style.pointerEvents = 'none';
 }
 
+/**
+ * Re-apply persistent look/peek indicators after a board re-render.
+ */
 function applyIndicators() {
     for (const [pid, indices] of Object.entries(activeLookIndicators)) {
         for (const idx of Object.keys(indices)) {

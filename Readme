@@ -1,19 +1,101 @@
 # Cambio Card Game
-This is an open-source project for a card game I learned about while I was in college. The game is simple yet unique because it requires you to remember not only your cards but also others', using a bit of luck and skill to score the lowest hand.
 
-**Link to project:** cambiogame.com
+Cambio is a browser-based version of the memory card game where players try to
+finish with the lowest-value hand. The game mixes luck, memory, and timing:
+players memorize some of their cards, draw from the deck or discard pile, swap
+cards, use special-card abilities, and try to eliminate matching cards when they
+know what is on the table.
 
-## How It's Made:
+Live site: https://cambiogame.com
 
-**Tech used:** HTML (Front-end), Python (Back-end), Google Jules (Aiding in rewriting code and debugging + writing the logic), and Cursor (Writing the JS and HTML).
+## Features
 
-I initially started by working on the framework. I knew I wanted to make a website for this card game because it would be readily accessible. I have experience with Python, so I knew I wanted to use that as the backend. I then had to create a bridge using JS (This was all written via AI. I aided in debugging and rewriting when things broke).
+- Real-time multiplayer rooms over FastAPI WebSockets.
+- Shareable room links such as `/join/ABC123`.
+- Configurable starting hand size and deck count.
+- Optional 60-second turn timer to prevent AFK turns from freezing a room.
+- Single-player practice mode with a basic AI opponent.
+- Mobile-friendly table layout with opponent hands, deck/discard, and your hand.
+- Grace-period scoring after Cambio is called.
+- Stale-room cleanup to keep server memory usage low.
 
-Then it came to actually writing the game, I knew I wanted a deck of 54 cards (including Jokers), so I created lists to act as the deck, which held card objects. Then created the rules with the help of AI to write and debug the game logic. 
+## Tech Stack
 
-## Lessons Learned:
+- Backend: Python, FastAPI, Pydantic, WebSockets.
+- Frontend: HTML, CSS, and vanilla JavaScript.
+- Tests: pytest for backend game and room-manager behavior.
 
-I got to be more hands-on with python learning how to bridge it with websockets and FastAPI, trying to make sure everything tied well with each other. I also got to experiment with multiple AIs, learning how to prompt them and how to review their code to push onto GitHub.
+## Project Structure
 
+- `Backend/backend.py`: FastAPI app, REST endpoints, WebSocket handler, room
+  manager, scoring, cleanup, timers, and bot behavior.
+- `Backend/test_*.py`: Backend tests for deck logic, room management, cleanup,
+  scoring, and win-condition edge cases.
+- `Frontend/index.html`: Main app markup and CSS.
+- `Frontend/bridge.js`: Browser-side state bridge for API calls, WebSocket
+  events, rendering, animations, and lobby actions.
+- `Frontend/instructions.html`: Player-facing rules page.
+- `Frontend/rules.pdf`: Downloadable rules reference.
+- `GAME_MECHANICS_REFERENCE.md`: Notes for game rules and implementation.
 
+## Local Development
 
+Install backend dependencies:
+
+```bash
+python3 -m pip install -r Backend/requirements.txt
+```
+
+Run the backend and static frontend:
+
+```bash
+python3 -m uvicorn Backend.backend:app --host 127.0.0.1 --port 8000
+```
+
+Open:
+
+```text
+http://127.0.0.1:8000
+```
+
+Run tests:
+
+```bash
+python3 -m pytest Backend
+```
+
+## Room Cleanup Policy
+
+Rooms are stored in memory, so cleanup is intentionally conservative with RAM:
+
+- Bot-only or abandoned bot rooms close after 5 minutes.
+- Playing rooms with no connected human players close after 10 minutes.
+- Playing rooms with connected humans close after 20 minutes of inactivity.
+- Waiting rooms with no connected humans close after 15 minutes.
+- Waiting rooms with connected humans close after 45 minutes.
+- Finished rooms close after 10 minutes.
+
+The cleanup task runs once per minute.
+
+## Credits
+
+Created by Kai Holland.
+
+AI assistance and co-authoring:
+
+- OpenAI ChatGPT/Codex: code generation, optimization, documentation, and
+  implementation assistance.
+- Anthropic Claude: debugging assistance.
+- Google Jules: wrote most of `Frontend/bridge.js` and assisted with game-logic
+  development.
+
+Additional tooling: Cursor was used during development for editing and AI-assisted
+iteration.
+
+## Lessons Learned
+
+This project was a practical way to connect Python backend code with a browser
+frontend through WebSockets. The most useful lessons were around keeping server
+state authoritative, validating every gameplay action on the backend, designing
+cleanup for an in-memory room system, and reviewing AI-generated code carefully
+before shipping it.
