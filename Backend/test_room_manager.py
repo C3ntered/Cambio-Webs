@@ -1,4 +1,6 @@
 import pytest
+import asyncio
+from datetime import datetime, timedelta
 from Backend.backend import Card, GameRoomManager, Room, Player, GameStatus, GameState, get_card_value
 
 def test_deck_auto_adjustment_below_threshold():
@@ -200,3 +202,49 @@ def test_bot_targets_highest_value_card_for_swap():
     ]
 
     assert manager._bot_worst_card_index(room, bot) == 1
+
+
+def test_cleanup_removes_abandoned_bot_room_after_five_minutes():
+    manager = GameRoomManager()
+    room = manager.create_room(username="Player1", play_with_bot=True)
+    human = next(player for player in room.players if not player.is_bot)
+    human.is_connected = False
+    room.last_activity = datetime.now() - timedelta(minutes=6)
+
+    asyncio.run(manager.cleanup_stale_rooms())
+
+    assert room.room_id not in manager.rooms
+
+
+def test_cleanup_keeps_bot_room_with_connected_human_before_active_timeout():
+    manager = GameRoomManager()
+    room = manager.create_room(username="Player1", play_with_bot=True)
+    room.last_activity = datetime.now() - timedelta(minutes=6)
+
+    asyncio.run(manager.cleanup_stale_rooms())
+
+    assert room.room_id in manager.rooms
+
+
+def test_cleanup_removes_active_waiting_lobby_after_shorter_timeout():
+    manager = GameRoomManager()
+    room = manager.create_room(username="Player1")
+    room.last_activity = datetime.now() - timedelta(minutes=46)
+
+    asyncio.run(manager.cleanup_stale_rooms())
+
+    assert room.room_id not in manager.rooms
+
+
+def test_cleanup_removes_abandoned_human_game_after_ten_minutes():
+    manager = GameRoomManager()
+    room = manager.create_room(username="Player1")
+    manager.join_room(room.room_id, "Player2")
+    for player in room.players:
+        player.is_connected = False
+    room.status = GameStatus.PLAYING
+    room.last_activity = datetime.now() - timedelta(minutes=11)
+
+    asyncio.run(manager.cleanup_stale_rooms())
+
+    assert room.room_id not in manager.rooms

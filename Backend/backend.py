@@ -37,7 +37,7 @@ async def lifespan(app):
     """
     async def _cleanup_loop():
         while True:
-            await asyncio.sleep(10 * 60)  # Run every 10 minutes
+            await asyncio.sleep(60)  # Run every minute
             try:
                 await room_manager.cleanup_stale_rooms()
             except Exception as e:
@@ -291,6 +291,12 @@ FACE_RANKS = {"Jack", "Queen", "King"}
 BOT_TURN_START_DELAY_RANGE = (2.0, 3.2)
 BOT_ACTION_DELAY_RANGE = (1.4, 2.4)
 BOT_END_TURN_DELAY_RANGE = (1.2, 2.0)
+BOT_ONLY_ROOM_TIMEOUT_SECONDS = 5 * 60
+WAITING_EMPTY_ROOM_TIMEOUT_SECONDS = 15 * 60
+WAITING_ACTIVE_ROOM_TIMEOUT_SECONDS = 45 * 60
+PLAYING_ABANDONED_ROOM_TIMEOUT_SECONDS = 10 * 60
+PLAYING_ACTIVE_ROOM_TIMEOUT_SECONDS = 20 * 60
+FINISHED_ROOM_TIMEOUT_SECONDS = 10 * 60
 
 def get_card_value(card: Card, num_decks: int = 1) -> int:
     """
@@ -693,33 +699,44 @@ class GameRoomManager:
         Delete rooms that have been inactive too long.
         Broadcasts a warning to connected players before closing.
         Thresholds:
-          - PLAYING rooms:                           30 minutes inactivity (any move resets timer)
-          - WAITING rooms with no connected players: 30 minutes
-          - WAITING rooms with connected players:    2 hours
-          - FINISHED rooms:                          15 minutes
+          - Bot-only rooms:                          5 minutes inactivity
+          - PLAYING rooms with no connected humans:  10 minutes inactivity
+          - PLAYING rooms with connected humans:     20 minutes inactivity (any move resets timer)
+          - WAITING rooms with no connected humans:  15 minutes
+          - WAITING rooms with connected humans:     45 minutes
+          - FINISHED rooms:                          10 minutes
         """
         now = datetime.now()
         to_delete = []
 
         for room_id, room in self.rooms.items():
             age = (now - (room.last_activity or room.created_at)).total_seconds()
-            connected = sum(1 for p in room.players if p.is_connected)
+            connected_humans = sum(1 for p in room.players if p.is_connected and not p.is_bot)
+            has_bot = any(p.is_bot for p in room.players)
+            has_human = any(not p.is_bot for p in room.players)
+            bot_only_or_abandoned_bot_room = has_bot and (not has_human or connected_humans == 0)
 
-            if room.status == GameStatus.FINISHED and age > 15 * 60:
+            if bot_only_or_abandoned_bot_room and age > BOT_ONLY_ROOM_TIMEOUT_SECONDS:
+                to_delete.append((room_id, "bot_only"))
+            elif room.status == GameStatus.FINISHED and age > FINISHED_ROOM_TIMEOUT_SECONDS:
                 to_delete.append((room_id, "game_finished"))
-            elif room.status == GameStatus.PLAYING and age > 30 * 60:
+            elif room.status == GameStatus.PLAYING and connected_humans == 0 and age > PLAYING_ABANDONED_ROOM_TIMEOUT_SECONDS:
+                to_delete.append((room_id, "abandoned_game"))
+            elif room.status == GameStatus.PLAYING and age > PLAYING_ACTIVE_ROOM_TIMEOUT_SECONDS:
                 to_delete.append((room_id, "inactivity"))
-            elif room.status == GameStatus.WAITING and connected == 0 and age > 30 * 60:
+            elif room.status == GameStatus.WAITING and connected_humans == 0 and age > WAITING_EMPTY_ROOM_TIMEOUT_SECONDS:
                 to_delete.append((room_id, "empty_lobby"))
-            elif room.status == GameStatus.WAITING and age > 2 * 60 * 60:
+            elif room.status == GameStatus.WAITING and age > WAITING_ACTIVE_ROOM_TIMEOUT_SECONDS:
                 to_delete.append((room_id, "inactivity"))
 
         for room_id, reason in to_delete:
             # Notify connected players before closing
             reason_messages = {
                 "inactivity": "Room closed due to inactivity. The game state has been cleared.",
-                "empty_lobby": "Lobby closed — no players were connected for 30 minutes.",
+                "empty_lobby": "Lobby closed — no players were connected for 15 minutes.",
                 "game_finished": "Room closed after game ended.",
+                "bot_only": "Practice room closed after 5 minutes without a connected human player.",
+                "abandoned_game": "Game closed after 10 minutes without connected players.",
             }
             await self.broadcast_to_room(room_id, {
                 "type": "server_closing",
