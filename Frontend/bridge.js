@@ -64,8 +64,19 @@ let eliminationTarget = null; // Target for elimination (waiting for replacement
 let isAnimating = false;
 let activeLookIndicators = {}; // State of cards being looked at
 const actionHistory = [];
+let turnTimerInterval = null;
 
-async function joinGame(username, roomId = null) {
+function getJoinUrl(roomId) {
+    const normalizedRoomId = String(roomId || '').trim().toUpperCase();
+    return `${window.location.origin}/join/${normalizedRoomId}`;
+}
+
+function getRoomIdFromPath() {
+    const match = window.location.pathname.match(/^\/join\/([A-Za-z0-9]{6})\/?$/);
+    return match ? match[1].toUpperCase() : '';
+}
+
+async function joinGame(username, roomId = null, options = {}) {
     if (!username) {
         throw new Error('Username is required');
     }
@@ -80,13 +91,16 @@ async function joinGame(username, roomId = null) {
         const handSize = document.getElementById('hand-size-select')?.value || 4;
         const numDecks = document.getElementById('num-decks-select')?.value || 1;
         const redKingVariant = document.getElementById('red-king-variant')?.checked || false;
+        const turnTimerEnabled = document.getElementById('turn-timer-enabled')?.checked || false;
 
         payload = {
             username,
             max_players: 8, // Increased max players default
             initial_hand_size: parseInt(handSize),
             num_decks: parseInt(numDecks),
-            red_king_variant: redKingVariant
+            red_king_variant: redKingVariant,
+            play_with_bot: !!options.playWithBot,
+            turn_timer_enabled: turnTimerEnabled
         };
     }
 
@@ -206,6 +220,13 @@ function handleSocketMessage(event) {
         case 'cambio_called':
             notify(message.data.message);
             recordAction(message.data.message, message.type === 'cambio_called' ? 'alert' : 'draw');
+            latestRoomState = message.data.room;
+            renderBoard(message.data.room, message.data.your_player_id || playerContext.playerId);
+            break;
+        case 'bot_action':
+        case 'turn_timeout':
+            notify(message.data.message);
+            recordAction(message.data.message, message.type === 'turn_timeout' ? 'alert' : 'info');
             latestRoomState = message.data.room;
             renderBoard(message.data.room, message.data.your_player_id || playerContext.playerId);
             break;
@@ -885,7 +906,7 @@ function renderBoard(room, yourPlayerId) {
             item.style.margin = '5px 0';
             item.style.backgroundColor = player.player_id === yourPlayerId ? '#e3f2fd' : '#f5f5f5';
             item.style.borderRadius = '4px';
-            item.textContent = player.username + (player.player_id === yourPlayerId ? ' (You)' : '');
+            item.textContent = player.username + (player.player_id === yourPlayerId ? ' (You)' : '') + (player.is_bot ? ' (Bot)' : '');
             if (player.is_connected) {
                 const statusDot = document.createElement('span');
                 statusDot.style.color = 'green';
@@ -932,6 +953,7 @@ function renderBoard(room, yourPlayerId) {
 
     const turnIndicator = document.getElementById('turn-indicator');
     if (turnIndicator) {
+        clearTurnTimerDisplay();
         const isWaiting = room.status?.toLowerCase() === GAME_STATUS.WAITING;
         const isViewingPhase = room.game_state?.viewing_phase;
         if (isWaiting) {
@@ -963,8 +985,9 @@ function renderBoard(room, yourPlayerId) {
                 if (currentPlayer.player_id === yourPlayerId) {
                     turnIndicator.innerText = 'Your turn';
                 } else {
-                    turnIndicator.innerText = `Waiting for ${currentPlayer.username}`;
+                    turnIndicator.innerText = `Waiting for ${currentPlayer.username}${currentPlayer.is_bot ? ' (Bot)' : ''}`;
                 }
+                startTurnTimerDisplay(room, turnIndicator);
             } else {
                 turnIndicator.innerText = 'Waiting for players...';
             }
@@ -1409,6 +1432,37 @@ function renderBoard(room, yourPlayerId) {
     applyIndicators();
 }
 
+function clearTurnTimerDisplay() {
+    if (turnTimerInterval !== null) {
+        clearInterval(turnTimerInterval);
+        turnTimerInterval = null;
+    }
+}
+
+function startTurnTimerDisplay(room, container) {
+    if (!room?.turn_timer_enabled || !room?.game_state?.turn_started_at || room.status?.toLowerCase() !== GAME_STATUS.PLAYING) {
+        return;
+    }
+
+    const line = document.createElement('div');
+    line.className = 'turn-timer-line';
+    line.innerHTML = 'Timer: <span id="turn-countdown">60</span>s';
+    container.appendChild(line);
+
+    const countdown = line.querySelector('#turn-countdown');
+    const startedAt = new Date(room.game_state.turn_started_at).getTime();
+    const seconds = Number(room.turn_timer_seconds || 60);
+
+    const update = () => {
+        const elapsed = Math.floor((Date.now() - startedAt) / 1000);
+        const remaining = Math.max(0, seconds - elapsed);
+        if (countdown) countdown.textContent = String(remaining);
+    };
+
+    update();
+    turnTimerInterval = setInterval(update, 1000);
+}
+
 function formatCard(card) {
     return `${card.rank} of ${card.suit}`;
 }
@@ -1516,8 +1570,10 @@ function renderRoomSettings(room) {
     const panel = document.getElementById('room-settings');
     const handSelect = document.getElementById('game-hand-size-select');
     const decksSelect = document.getElementById('game-num-decks-select');
+    const timerToggle = document.getElementById('game-turn-timer-enabled');
     const redKingNote = document.getElementById('red-king-note');
     const leaveBtn = document.getElementById('leave-room-btn');
+    const addBotBtn = document.getElementById('add-bot-btn');
     if (!room) return;
 
     const canEditSettings = room.status?.toLowerCase() === GAME_STATUS.WAITING ||
@@ -1532,6 +1588,10 @@ function renderRoomSettings(room) {
         decksSelect.value = String(room.num_decks || 1);
         decksSelect.disabled = !canEditSettings;
     }
+    if (timerToggle) {
+        timerToggle.checked = !!room.turn_timer_enabled;
+        timerToggle.disabled = !canEditSettings;
+    }
     if (redKingNote) {
         redKingNote.textContent = Number(room.num_decks) === 2
             ? 'Red Kings score -1 with two decks.'
@@ -1540,6 +1600,11 @@ function renderRoomSettings(room) {
     if (leaveBtn) {
         leaveBtn.disabled = !canEditSettings;
         leaveBtn.title = canEditSettings ? 'Leave this room' : 'You can leave between rounds';
+    }
+    if (addBotBtn) {
+        const hasBot = room.players.some(p => p.is_bot);
+        addBotBtn.disabled = !canEditSettings || hasBot || room.players.length >= room.max_players;
+        addBotBtn.style.display = canEditSettings && !hasBot ? 'inline-block' : 'none';
     }
 }
 
@@ -1555,10 +1620,17 @@ function updateRoomSettings() {
 
     const handSize = parseInt(document.getElementById('game-hand-size-select')?.value || latestRoomState.initial_hand_size || 4);
     const numDecks = parseInt(document.getElementById('game-num-decks-select')?.value || latestRoomState.num_decks || 1);
+    const turnTimerEnabled = document.getElementById('game-turn-timer-enabled')?.checked || false;
     sendMessage('update_settings', {
         initial_hand_size: handSize,
-        num_decks: numDecks
+        num_decks: numDecks,
+        turn_timer_enabled: turnTimerEnabled
     });
+}
+
+function addBotToRoom() {
+    if (!latestRoomState) return;
+    sendMessage('add_bot', { bot_name: 'Cambio Bot' });
 }
 
 function leaveRoom() {
@@ -1576,6 +1648,7 @@ function leaveRoom() {
 }
 
 function resetToLobby() {
+    clearTurnTimerDisplay();
     if (socket) {
         socket.close();
         socket = null;
@@ -1649,6 +1722,7 @@ function copyRoomId() {
         alert('No room ID available');
         return;
     }
+    const roomLink = getJoinUrl(roomId);
 
     const showCopiedFeedback = () => {
         const button = document.getElementById('copy-room-id');
@@ -1664,17 +1738,17 @@ function copyRoomId() {
                 button.classList.remove('copied');
             }, 2000);
         }
-        notify(`Room ID "${roomId}" copied to clipboard!`);
+        notify('Join link copied to clipboard!');
     };
 
     // Try modern Clipboard API first
     if (navigator.clipboard && navigator.clipboard.writeText) {
-        navigator.clipboard.writeText(roomId).then(showCopiedFeedback).catch(err => {
+        navigator.clipboard.writeText(roomLink).then(showCopiedFeedback).catch(err => {
             console.warn('Clipboard API failed, trying fallback', err);
-            fallbackCopy(roomId, showCopiedFeedback);
+            fallbackCopy(roomLink, showCopiedFeedback);
         });
     } else {
-        fallbackCopy(roomId, showCopiedFeedback);
+        fallbackCopy(roomLink, showCopiedFeedback);
     }
 }
 
@@ -1728,6 +1802,23 @@ async function handleCreateRoom() {
     try {
         await joinGame(username, null);
         updateStatus(`Created room ${playerContext.roomId}`);
+    } catch (error) {
+        alert(error.message);
+    }
+}
+
+async function handlePracticeBot() {
+    const usernameInput = document.getElementById('username');
+    const username = usernameInput ? usernameInput.value.trim() : '';
+    if (!username) {
+        alert('Enter your name before starting practice.');
+        usernameInput?.focus();
+        return;
+    }
+
+    try {
+        await joinGame(username, null, { playWithBot: true });
+        updateStatus(`Created practice room ${playerContext.roomId}`);
     } catch (error) {
         alert(error.message);
     }
@@ -1821,6 +1912,7 @@ window.tallyScores = tallyScores;
 window.joinGame = joinGame;
 window.handleJoin = handleJoin;
 window.handleCreateRoom = handleCreateRoom;
+window.handlePracticeBot = handlePracticeBot;
 window.handleJoinRoom = handleJoinRoom;
 window.drawCard = drawCard;
 window.drawFromDiscard = drawFromDiscard;
@@ -1835,7 +1927,19 @@ window.shareGameResult = shareGameResult;
 window.skipAbility = skipAbility;
 window.updateRoomSettings = updateRoomSettings;
 window.leaveRoom = leaveRoom;
+window.addBotToRoom = addBotToRoom;
 // window.toggleAdminMode = toggleAdminMode; // ADMIN MODE - Disabled for production
+
+window.addEventListener('DOMContentLoaded', () => {
+    const linkedRoomId = getRoomIdFromPath();
+    if (!linkedRoomId) return;
+
+    const roomInput = document.getElementById('room-id');
+    const joinNameInput = document.getElementById('join-username');
+    if (roomInput) roomInput.value = linkedRoomId;
+    if (joinNameInput) joinNameInput.focus();
+    updateStatus(`Joining room ${linkedRoomId}. Enter your name to continue.`);
+});
 
 function highlightCard(pid, idx, duration = 3000) {
     const btn = findCardElement(pid, idx, latestRoomState, playerContext.playerId);

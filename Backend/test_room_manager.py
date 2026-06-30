@@ -106,3 +106,31 @@ def test_join_finished_room_for_next_round():
     assert player_id
     assert joined_room.status == GameStatus.FINISHED
     assert len(joined_room.players) == 2
+
+
+def test_create_practice_room_adds_bot_player():
+    manager = GameRoomManager()
+
+    room = manager.create_room(username="Player1", play_with_bot=True)
+
+    assert len(room.players) == 2
+    assert any(player.is_bot for player in room.players)
+    assert room.players[0].is_bot is False
+
+
+def test_room_settings_can_toggle_turn_timer():
+    manager = GameRoomManager()
+    room = manager.create_room(username="Player1")
+
+    updated = manager.update_room_settings(room.room_id, turn_timer_enabled=True)
+
+    assert updated.turn_timer_enabled is True
+
+
+def test_start_game_records_turn_start_time():
+    manager = GameRoomManager()
+    room = manager.create_room(username="Player1", play_with_bot=True)
+
+    manager.start_game(room.room_id)
+
+    assert room.game_state.turn_started_at is not None

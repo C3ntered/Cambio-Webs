@@ -45,7 +45,7 @@ async def lifespan(app):
 
     async def _grace_period_loop():
         """
-        Auto-tally scores when the 10-second grace period expires.
+        Auto-tally scores when the 10-second grace period expires and enforce optional turn timers.
         """
         while True:
             await asyncio.sleep(1)
@@ -69,8 +69,10 @@ async def lifespan(app):
                                     "room": room.model_dump(mode='json')
                                 }
                             })
+                    if room_manager.should_auto_advance_turn(room, now):
+                        await room_manager.auto_advance_timed_out_turn(room_id)
             except Exception as e:
-                print(f"[GracePeriod] Error: {e}")
+                print(f"[RoomTimers] Error: {e}")
 
     cleanup_task = asyncio.create_task(_cleanup_loop())
     grace_task = asyncio.create_task(_grace_period_loop())
@@ -207,6 +209,7 @@ class Player(BaseModel):
     pending_drawn_card: Optional[Card] = None  # card drawn, awaiting swap or discard choice
     pending_ability: Optional[str] = None  # Ability waiting to be used or skipped
     pending_swap_targets: Optional[Dict] = None # Stores targets for look_and_swap decision phase
+    is_bot: bool = False
 
 class GameState(BaseModel):
     """
@@ -222,6 +225,7 @@ class GameState(BaseModel):
     cambio_called: bool = False
     cambio_caller: Optional[str] = None
     final_round_turns: Optional[int] = None
+    turn_started_at: Optional[datetime] = None
 
 class Room(BaseModel):
     """
@@ -242,6 +246,8 @@ class Room(BaseModel):
     red_king_variant: bool = False # If True, Red Kings are -2
     last_winner_id: Optional[str] = None
     grace_period_end: Optional[datetime] = None
+    turn_timer_enabled: bool = False
+    turn_timer_seconds: int = 60
 
 class CreateRoomRequest(BaseModel):
     """
@@ -252,6 +258,8 @@ class CreateRoomRequest(BaseModel):
     num_decks: Optional[int] = None  # If None, auto-calculate based on player count (>5 = 2 decks)
     initial_hand_size: int = 4  # 4, 6, or 8
     red_king_variant: bool = False
+    play_with_bot: bool = False
+    turn_timer_enabled: bool = False
 
 class JoinRoomRequest(BaseModel):
     """
@@ -259,12 +267,19 @@ class JoinRoomRequest(BaseModel):
     """
     username: str
 
+class AddBotRequest(BaseModel):
+    """
+    AddBotRequest model for adding a practice opponent to a lobby.
+    """
+    bot_name: str = "Cambio Bot"
+
 class UpdateRoomSettingsRequest(BaseModel):
     """
     UpdateRoomSettingsRequest model for changing lobby settings between rounds.
     """
     initial_hand_size: Optional[int] = None
     num_decks: Optional[int] = None
+    turn_timer_enabled: Optional[bool] = None
 
 # Constants for card deck creation
 SUITS = ("Hearts", "Diamonds", "Clubs", "Spades")
@@ -317,6 +332,7 @@ class GameRoomManager:
         """Initialize the GameRoomManager."""
         self.rooms: Dict[str, Room] = {}
         self.room_connections: Dict[str, Dict[str, WebSocket]] = {}  # room_id -> {player_id -> websocket}
+        self.bot_turn_tasks: Dict[str, asyncio.Task] = {}
 
     def _normalize_room_id(self, room_id: str) -> str:
         if not room_id:
@@ -341,7 +357,16 @@ class GameRoomManager:
             if room_id not in self.rooms:
                 return room_id
     
-    def create_room(self, username: str, max_players: int = 8, num_decks: Optional[int] = None, initial_hand_size: int = 4, red_king_variant: bool = False) -> Room:
+    def create_room(
+        self,
+        username: str,
+        max_players: int = 8,
+        num_decks: Optional[int] = None,
+        initial_hand_size: int = 4,
+        red_king_variant: bool = False,
+        play_with_bot: bool = False,
+        turn_timer_enabled: bool = False
+    ) -> Room:
         """Create a new game room"""
         room_id = self._generate_room_code()
         player_id = str(uuid.uuid4())[:8]
@@ -366,13 +391,54 @@ class GameRoomManager:
             max_players=max_players,
             num_decks=num_decks,
             initial_hand_size=initial_hand_size,
-            red_king_variant=red_king_variant
+            red_king_variant=red_king_variant,
+            turn_timer_enabled=turn_timer_enabled
         )
         
         self.rooms[room_id] = room
         self.room_connections[room_id] = {}
+
+        if play_with_bot:
+            self.add_bot_to_room(room_id)
         
         return room
+
+    def add_bot_to_room(self, room_id: str, bot_name: str = "Cambio Bot") -> tuple[Room, str]:
+        """
+        Add a simple AI player to a waiting room.
+        """
+        resolved_room_id = self._resolve_room_id(room_id)
+        if not resolved_room_id or resolved_room_id not in self.rooms:
+            raise HTTPException(status_code=404, detail="Room not found")
+
+        room = self.rooms[resolved_room_id]
+        if room.status != GameStatus.WAITING:
+            raise HTTPException(status_code=400, detail="Bots can only join before the game starts")
+
+        if len(room.players) >= room.max_players:
+            raise HTTPException(status_code=400, detail="Room is full")
+
+        if any(p.is_bot for p in room.players):
+            raise HTTPException(status_code=400, detail="This room already has a bot")
+
+        player_id = f"bot-{str(uuid.uuid4())[:8]}"
+        base_name = (bot_name or "Cambio Bot").strip()[:24] or "Cambio Bot"
+        name = base_name
+        suffix = 2
+        existing_names = {p.username for p in room.players}
+        while name in existing_names:
+            name = f"{base_name} {suffix}"
+            suffix += 1
+
+        bot = Player(
+            player_id=player_id,
+            username=name,
+            is_connected=True,
+            is_bot=True
+        )
+        room.players.append(bot)
+        room.last_activity = datetime.now()
+        return room, player_id
     
     def join_room(self, room_id: str, username: str) -> tuple[Room, str]:
         """
@@ -403,7 +469,13 @@ class GameRoomManager:
         # Removed auto-start - game must be manually started
         return room, player_id
 
-    def update_room_settings(self, room_id: str, initial_hand_size: Optional[int] = None, num_decks: Optional[int] = None) -> Room:
+    def update_room_settings(
+        self,
+        room_id: str,
+        initial_hand_size: Optional[int] = None,
+        num_decks: Optional[int] = None,
+        turn_timer_enabled: Optional[bool] = None
+    ) -> Room:
         """
         Update room settings while the room is in a lobby state.
         """
@@ -424,6 +496,9 @@ class GameRoomManager:
             if num_decks not in (1, 2):
                 raise HTTPException(status_code=400, detail="Number of decks must be 1 or 2")
             room.num_decks = num_decks
+
+        if turn_timer_enabled is not None:
+            room.turn_timer_enabled = bool(turn_timer_enabled)
 
         room.last_activity = datetime.now()
         return room
@@ -520,6 +595,7 @@ class GameRoomManager:
         
         room.game_state.current_turn = starter_id
         room.game_state.turn_number = 1
+        room.game_state.turn_started_at = datetime.now()
     
     def create_deck(self, num_decks: int = 1) -> List[Card]:
         """
@@ -800,6 +876,7 @@ class GameRoomManager:
             next_index = (current_index + 1) % len(room.players)
             room.game_state.current_turn = room.players[next_index].player_id
             room.game_state.turn_number += 1
+            room.game_state.turn_started_at = datetime.now()
             
             if room.game_state.cambio_called:
                 if room.game_state.final_round_turns is None:
@@ -1079,6 +1156,194 @@ class GameRoomManager:
             }
         })
 
+    def should_auto_advance_turn(self, room: Room, now: datetime) -> bool:
+        """
+        Return True when a room's optional turn timer has expired.
+        """
+        if not room.turn_timer_enabled:
+            return False
+        if room.status != GameStatus.PLAYING:
+            return False
+        if room.game_state.viewing_phase or room.game_state.game_phase != "playing":
+            return False
+        if not room.game_state.current_turn or not room.game_state.turn_started_at:
+            return False
+        elapsed = (now - room.game_state.turn_started_at).total_seconds()
+        return elapsed >= room.turn_timer_seconds
+
+    def _non_empty_card_indices(self, player: Player) -> List[int]:
+        return [i for i, card in enumerate(player.hand) if card is not None]
+
+    async def auto_advance_timed_out_turn(self, room_id: str):
+        """
+        Resolve a stale turn enough to keep the game moving, then advance.
+        """
+        room = self.get_room(room_id)
+        if not room or room.status != GameStatus.PLAYING:
+            return
+
+        player = next((p for p in room.players if p.player_id == room.game_state.current_turn), None)
+        if not player:
+            return
+
+        if player.pending_drawn_card:
+            if player.last_draw_source == "discard":
+                indices = self._non_empty_card_indices(player)
+                if indices:
+                    swap_index = secure_random.choice(indices)
+                    discarded_card = player.hand[swap_index]
+                    player.hand[swap_index] = player.pending_drawn_card
+                    room.game_state.discard_pile.append(discarded_card)
+            else:
+                room.game_state.discard_pile.append(player.pending_drawn_card)
+            player.pending_drawn_card = None
+
+        player.pending_ability = None
+        player.pending_swap_targets = None
+
+        await self.broadcast_to_room(room_id, {
+            "type": "turn_timeout",
+            "data": {
+                "player_id": player.player_id,
+                "message": f"{player.username}'s turn timed out.",
+                "room": room.model_dump(mode="json")
+            }
+        })
+        await self.end_turn(room_id, check_win=True)
+
+    def schedule_bot_turn(self, room_id: str):
+        """
+        Schedule the current bot player's turn, if applicable.
+        """
+        room = self.get_room(room_id)
+        if not room or room.status != GameStatus.PLAYING:
+            return
+        if room.game_state.viewing_phase or room.game_state.game_phase != "playing":
+            return
+
+        current = next((p for p in room.players if p.player_id == room.game_state.current_turn), None)
+        if not current or not current.is_bot:
+            return
+
+        existing = self.bot_turn_tasks.get(room.room_id)
+        if existing and not existing.done():
+            return
+
+        self.bot_turn_tasks[room.room_id] = asyncio.create_task(self.run_bot_turn(room.room_id, current.player_id))
+
+    async def run_bot_turn(self, room_id: str, bot_player_id: str):
+        """
+        A deliberately simple bot: draw, randomly swap or discard, skip abilities.
+        """
+        await asyncio.sleep(1.0)
+        room = self.get_room(room_id)
+        if not room or room.status != GameStatus.PLAYING:
+            return
+        if room.game_state.current_turn != bot_player_id or room.game_state.viewing_phase:
+            return
+
+        bot = next((p for p in room.players if p.player_id == bot_player_id and p.is_bot), None)
+        if not bot:
+            return
+
+        if not room.game_state.deck and len(room.game_state.discard_pile) > 1:
+            self.reshuffle_deck(room_id)
+            room = self.get_room(room_id)
+            await self.broadcast_to_room(room_id, {
+                "type": "deck_reshuffled",
+                "data": {
+                    "message": "Deck has been reshuffled",
+                    "room": room.model_dump(mode="json")
+                }
+            })
+
+        indices = self._non_empty_card_indices(bot)
+        if not indices:
+            await self.end_turn(room_id, check_win=True)
+            return
+
+        draw_from_discard = bool(room.game_state.discard_pile) and secure_random.random() < 0.3
+
+        if draw_from_discard:
+            drawn_card = room.game_state.discard_pile.pop()
+            swap_index = secure_random.choice(indices)
+            discarded_card = bot.hand[swap_index]
+            bot.hand[swap_index] = drawn_card
+            room.game_state.discard_pile.append(discarded_card)
+
+            await self.broadcast_to_room(room_id, {
+                "type": "player_drew_card",
+                "data": {
+                    "player_id": bot.player_id,
+                    "source": "discard",
+                    "room": room.model_dump(mode="json")
+                }
+            })
+            await asyncio.sleep(0.6)
+            await self.broadcast_to_room(room_id, {
+                "type": "cards_swapped",
+                "data": {
+                    "message": f"{bot.username} swapped from the discard pile.",
+                    "player1_id": bot.player_id,
+                    "card1_index": swap_index,
+                    "draw_source": "discard",
+                    "room": room.model_dump(mode="json")
+                }
+            })
+            await self.end_turn(room_id, check_win=True)
+            return
+
+        if not room.game_state.deck:
+            await self.broadcast_to_room(room_id, {
+                "type": "bot_action",
+                "data": {
+                    "message": f"{bot.username} could not draw because the deck is empty.",
+                    "room": room.model_dump(mode="json")
+                }
+            })
+            await self.end_turn(room_id, check_win=True)
+            return
+
+        drawn_card = room.game_state.deck.pop()
+        await self.broadcast_to_room(room_id, {
+            "type": "player_drew_card",
+            "data": {
+                "player_id": bot.player_id,
+                "source": "deck",
+                "room": room.model_dump(mode="json")
+            }
+        })
+        await asyncio.sleep(0.6)
+
+        if secure_random.random() < 0.5:
+            swap_index = secure_random.choice(indices)
+            discarded_card = bot.hand[swap_index]
+            bot.hand[swap_index] = drawn_card
+            room.game_state.discard_pile.append(discarded_card)
+            await self.broadcast_to_room(room_id, {
+                "type": "cards_swapped",
+                "data": {
+                    "message": f"{bot.username} swapped a drawn card into their hand.",
+                    "player1_id": bot.player_id,
+                    "card1_index": swap_index,
+                    "draw_source": "deck",
+                    "room": room.model_dump(mode="json")
+                }
+            })
+        else:
+            room.game_state.discard_pile.append(drawn_card)
+            await self.broadcast_to_room(room_id, {
+                "type": "bot_action",
+                "data": {
+                    "message": f"{bot.username} discarded a drawn card.",
+                    "room": room.model_dump(mode="json")
+                }
+            })
+
+        bot.pending_ability = None
+        bot.pending_swap_targets = None
+        await self.end_turn(room_id, check_win=True)
+
 
     async def end_turn(self, room_id: str, check_win: bool = False) -> Optional[str]:
         """
@@ -1101,6 +1366,7 @@ class GameRoomManager:
                 self.end_game(room_id, winner_id)
                 await self.broadcast_game_ended(room_id, winner_id)
                 return winner_id
+        self.schedule_bot_turn(room_id)
         return None
 
 
@@ -1134,6 +1400,13 @@ async def root():
         return response
     return {"message": "Cambio Card Game API", "status": "running", "note": f"index.html not found in {frontend_dir}"}
 
+@app.get("/join/{room_id}")
+async def join_page(room_id: str):
+    """
+    Serve the main app for direct room links like /join/ABC123.
+    """
+    return await root()
+
 @app.get("/instructions")
 async def instructions():
     """
@@ -1155,7 +1428,9 @@ async def create_room(request: CreateRoomRequest):
         request.max_players, 
         request.num_decks,
         request.initial_hand_size,
-        request.red_king_variant
+        request.red_king_variant,
+        request.play_with_bot,
+        request.turn_timer_enabled
     )
     return room
 
@@ -1186,6 +1461,22 @@ async def join_room(room_id: str, request: JoinRoomRequest):
     except HTTPException as e:
         raise e
 
+@app.post("/api/rooms/{room_id}/bot")
+async def add_bot(room_id: str, request: AddBotRequest):
+    """
+    Add a basic AI opponent to a waiting room.
+    """
+    room, bot_id = room_manager.add_bot_to_room(room_id, request.bot_name)
+    await room_manager.broadcast_to_room(room_id, {
+        "type": "player_joined",
+        "data": {
+            "player_id": bot_id,
+            "username": next((p.username for p in room.players if p.player_id == bot_id), request.bot_name),
+            "room": room.model_dump(mode='json')
+        }
+    })
+    return {"room": room, "player_id": bot_id}
+
 @app.patch("/api/rooms/{room_id}/settings", response_model=Room)
 async def update_room_settings(room_id: str, request: UpdateRoomSettingsRequest):
     """
@@ -1194,7 +1485,8 @@ async def update_room_settings(room_id: str, request: UpdateRoomSettingsRequest)
     room = room_manager.update_room_settings(
         room_id,
         initial_hand_size=request.initial_hand_size,
-        num_decks=request.num_decks
+        num_decks=request.num_decks,
+        turn_timer_enabled=request.turn_timer_enabled
     )
     await room_manager.broadcast_to_room(room_id, {
         "type": "room_settings_updated",
@@ -1717,7 +2009,8 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
                     room = room_manager.update_room_settings(
                         room_id,
                         initial_hand_size=settings_data.get("initial_hand_size"),
-                        num_decks=settings_data.get("num_decks")
+                        num_decks=settings_data.get("num_decks"),
+                        turn_timer_enabled=settings_data.get("turn_timer_enabled")
                     )
                 except HTTPException as e:
                     await websocket.send_json({"type": "error", "message": e.detail})
@@ -1728,6 +2021,23 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
                     "data": {
                         "room": room.model_dump(mode='json'),
                         "message": f"{player.username} updated room settings."
+                    }
+                })
+
+            elif msg_type == "add_bot":
+                try:
+                    room, bot_id = room_manager.add_bot_to_room(room_id, message.get("data", {}).get("bot_name", "Cambio Bot"))
+                except HTTPException as e:
+                    await websocket.send_json({"type": "error", "message": e.detail})
+                    continue
+
+                bot = next((p for p in room.players if p.player_id == bot_id), None)
+                await room_manager.broadcast_to_room(room_id, {
+                    "type": "player_joined",
+                    "data": {
+                        "player_id": bot_id,
+                        "username": bot.username if bot else "Cambio Bot",
+                        "room": room.model_dump(mode='json')
                     }
                 })
 
@@ -1771,11 +2081,13 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
                         if not room.game_state.current_turn:
                             room.game_state.current_turn = room.players[0].player_id
                         room.game_state.turn_number = 1
+                        room.game_state.turn_started_at = datetime.now()
                     
                     await room_manager.broadcast_to_room(room_id, {
                         "type": "round_started",
                         "data": {"room": room.model_dump(mode='json')}
                     })
+                    room_manager.schedule_bot_turn(room_id)
 
             elif msg_type == "start_game":
                 # Only allow starting if game is waiting and enough players
