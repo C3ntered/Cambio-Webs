@@ -134,3 +134,69 @@ def test_start_game_records_turn_start_time():
     manager.start_game(room.room_id)
 
     assert room.game_state.turn_started_at is not None
+
+
+def test_bot_takes_low_discard_over_high_hand_card():
+    manager = GameRoomManager()
+    room = manager.create_room(username="Player1", play_with_bot=True)
+    bot = next(player for player in room.players if player.is_bot)
+    bot.hand = [
+        Card(suit="Clubs", rank="Queen"),
+        Card(suit="Spades", rank="9"),
+        Card(suit="Hearts", rank="5"),
+        Card(suit="Diamonds", rank="2"),
+    ]
+    room.game_state.discard_pile = [Card(suit="Clubs", rank="Ace")]
+
+    assert manager._bot_should_take_discard(room, bot) is True
+
+
+def test_bot_ignores_bad_discard_when_hand_is_better():
+    manager = GameRoomManager()
+    room = manager.create_room(username="Player1", play_with_bot=True)
+    bot = next(player for player in room.players if player.is_bot)
+    bot.hand = [
+        Card(suit="Clubs", rank="Ace"),
+        Card(suit="Spades", rank="2"),
+        Card(suit="Hearts", rank="3"),
+        Card(suit="Diamonds", rank="4"),
+    ]
+    room.game_state.discard_pile = [Card(suit="Clubs", rank="Queen")]
+
+    assert manager._bot_should_take_discard(room, bot) is False
+
+
+def test_bot_swaps_drawn_card_only_when_it_improves_hand():
+    manager = GameRoomManager()
+    room = manager.create_room(username="Player1", play_with_bot=True)
+    bot = next(player for player in room.players if player.is_bot)
+    bot.hand = [
+        Card(suit="Clubs", rank="Queen"),
+        Card(suit="Spades", rank="9"),
+        Card(suit="Hearts", rank="5"),
+        Card(suit="Diamonds", rank="2"),
+    ]
+
+    assert manager._bot_should_swap_drawn_card(room, bot, Card(suit="Clubs", rank="3")) is True
+
+    bot.hand = [
+        Card(suit="Clubs", rank="Ace"),
+        Card(suit="Spades", rank="2"),
+        Card(suit="Hearts", rank="3"),
+        Card(suit="Diamonds", rank="4"),
+    ]
+    assert manager._bot_should_swap_drawn_card(room, bot, Card(suit="Clubs", rank="Queen")) is False
+
+
+def test_bot_targets_highest_value_card_for_swap():
+    manager = GameRoomManager()
+    room = manager.create_room(username="Player1", play_with_bot=True)
+    bot = next(player for player in room.players if player.is_bot)
+    bot.hand = [
+        Card(suit="Clubs", rank="Ace"),
+        Card(suit="Spades", rank="Queen"),
+        Card(suit="Hearts", rank="8"),
+        Card(suit="Diamonds", rank="2"),
+    ]
+
+    assert manager._bot_worst_card_index(room, bot) == 1

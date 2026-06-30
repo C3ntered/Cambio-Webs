@@ -288,6 +288,9 @@ RANKS = ("Ace", "2", "3", "4", "5", "6", "7", "8", "9", "10", "Jack", "Queen", "
 # Pre-computed sets for faster value calculation
 NUMERIC_RANKS = {str(n) for n in range(2, 11)}
 FACE_RANKS = {"Jack", "Queen", "King"}
+BOT_TURN_START_DELAY_RANGE = (2.0, 3.2)
+BOT_ACTION_DELAY_RANGE = (1.4, 2.4)
+BOT_END_TURN_DELAY_RANGE = (1.2, 2.0)
 
 def get_card_value(card: Card, num_decks: int = 1) -> int:
     """
@@ -1174,6 +1177,99 @@ class GameRoomManager:
     def _non_empty_card_indices(self, player: Player) -> List[int]:
         return [i for i, card in enumerate(player.hand) if card is not None]
 
+    async def _bot_sleep(self, delay_range: tuple[float, float]):
+        """
+        Add human-paced pauses between bot actions so players can react.
+        """
+        await asyncio.sleep(secure_random.uniform(*delay_range))
+
+    def _bot_worst_card_index(self, room: Room, bot: Player) -> Optional[int]:
+        """
+        Pick the highest-value card in the bot's hand as the best swap target.
+        """
+        indices = self._non_empty_card_indices(bot)
+        if not indices:
+            return None
+        return max(indices, key=lambda idx: get_card_value(bot.hand[idx], room.num_decks))
+
+    def _bot_should_take_discard(self, room: Room, bot: Player) -> bool:
+        """
+        Draw from discard when the visible card improves the bot's hand.
+        """
+        if not room.game_state.discard_pile:
+            return False
+
+        worst_index = self._bot_worst_card_index(room, bot)
+        if worst_index is None:
+            return False
+
+        discard_card = room.game_state.discard_pile[-1]
+        worst_card = bot.hand[worst_index]
+        discard_value = get_card_value(discard_card, room.num_decks)
+        worst_value = get_card_value(worst_card, room.num_decks)
+
+        if discard_value <= 3:
+            return True
+        if discard_value < worst_value:
+            return True
+        # A little imperfection keeps the practice opponent from feeling robotic.
+        return discard_value == worst_value and secure_random.random() < 0.2
+
+    def _bot_should_swap_drawn_card(self, room: Room, bot: Player, drawn_card: Card) -> bool:
+        """
+        Keep drawn cards that are likely to lower the bot's score.
+        """
+        worst_index = self._bot_worst_card_index(room, bot)
+        if worst_index is None:
+            return False
+
+        drawn_value = get_card_value(drawn_card, room.num_decks)
+        worst_value = get_card_value(bot.hand[worst_index], room.num_decks)
+
+        if drawn_value <= 3:
+            return True
+        if drawn_value < worst_value:
+            return True
+        if drawn_value == worst_value:
+            return secure_random.random() < 0.15
+        return False
+
+    async def _bot_eliminate_own_matching_card(self, room_id: str, bot: Player) -> bool:
+        """
+        Let the bot sacrifice one of its own cards when it matches the discard rank.
+        Returns True if a card was eliminated.
+        """
+        await self._bot_sleep(BOT_ACTION_DELAY_RANGE)
+        room = self.get_room(room_id)
+        if not room or not room.game_state.discard_pile:
+            return False
+        if room.status != GameStatus.PLAYING or room.game_state.current_turn != bot.player_id:
+            return False
+
+        top_card = room.game_state.discard_pile[-1]
+        matches = [
+            idx for idx, card in enumerate(bot.hand)
+            if card is not None and card.rank == top_card.rank
+        ]
+        if not matches:
+            return False
+
+        card_index = max(matches, key=lambda idx: get_card_value(bot.hand[idx], room.num_decks))
+        played_card = bot.hand[card_index]
+        bot.hand[card_index] = None
+        room.game_state.discard_pile.append(played_card)
+
+        room = self.get_room(room_id)
+        await self.broadcast_to_room(room_id, {
+            "type": "card_played",
+            "data": {
+                "player_id": bot.player_id,
+                "card": played_card.model_dump(mode="json"),
+                "room": room.model_dump(mode="json")
+            }
+        })
+        return True
+
     async def auto_advance_timed_out_turn(self, room_id: str):
         """
         Resolve a stale turn enough to keep the game moving, then advance.
@@ -1233,9 +1329,10 @@ class GameRoomManager:
 
     async def run_bot_turn(self, room_id: str, bot_player_id: str):
         """
-        A deliberately simple bot: draw, randomly swap or discard, skip abilities.
+        A basic practice bot: take useful visible cards, keep lower-value draws,
+        sacrifice matching cards, and pause between actions so humans can react.
         """
-        await asyncio.sleep(1.0)
+        await self._bot_sleep(BOT_TURN_START_DELAY_RANGE)
         room = self.get_room(room_id)
         if not room or room.status != GameStatus.PLAYING:
             return
@@ -1244,6 +1341,11 @@ class GameRoomManager:
 
         bot = next((p for p in room.players if p.player_id == bot_player_id and p.is_bot), None)
         if not bot:
+            return
+
+        await self._bot_eliminate_own_matching_card(room_id, bot)
+        room = self.get_room(room_id)
+        if not room or room.status != GameStatus.PLAYING or room.game_state.current_turn != bot_player_id:
             return
 
         if not room.game_state.deck and len(room.game_state.discard_pile) > 1:
@@ -1262,11 +1364,15 @@ class GameRoomManager:
             await self.end_turn(room_id, check_win=True)
             return
 
-        draw_from_discard = bool(room.game_state.discard_pile) and secure_random.random() < 0.3
+        draw_from_discard = self._bot_should_take_discard(room, bot)
 
         if draw_from_discard:
             drawn_card = room.game_state.discard_pile.pop()
-            swap_index = secure_random.choice(indices)
+            swap_index = self._bot_worst_card_index(room, bot)
+            if swap_index is None:
+                room.game_state.discard_pile.append(drawn_card)
+                await self.end_turn(room_id, check_win=True)
+                return
             discarded_card = bot.hand[swap_index]
             bot.hand[swap_index] = drawn_card
             room.game_state.discard_pile.append(discarded_card)
@@ -1279,7 +1385,7 @@ class GameRoomManager:
                     "room": room.model_dump(mode="json")
                 }
             })
-            await asyncio.sleep(0.6)
+            await self._bot_sleep(BOT_ACTION_DELAY_RANGE)
             await self.broadcast_to_room(room_id, {
                 "type": "cards_swapped",
                 "data": {
@@ -1290,6 +1396,8 @@ class GameRoomManager:
                     "room": room.model_dump(mode="json")
                 }
             })
+            await self._bot_eliminate_own_matching_card(room_id, bot)
+            await self._bot_sleep(BOT_END_TURN_DELAY_RANGE)
             await self.end_turn(room_id, check_win=True)
             return
 
@@ -1301,6 +1409,7 @@ class GameRoomManager:
                     "room": room.model_dump(mode="json")
                 }
             })
+            await self._bot_sleep(BOT_END_TURN_DELAY_RANGE)
             await self.end_turn(room_id, check_win=True)
             return
 
@@ -1313,10 +1422,17 @@ class GameRoomManager:
                 "room": room.model_dump(mode="json")
             }
         })
-        await asyncio.sleep(0.6)
+        await self._bot_sleep(BOT_ACTION_DELAY_RANGE)
 
-        if secure_random.random() < 0.5:
-            swap_index = secure_random.choice(indices)
+        if self._bot_should_swap_drawn_card(room, bot, drawn_card):
+            swap_index = self._bot_worst_card_index(room, bot)
+            if swap_index is None:
+                room.game_state.discard_pile.append(drawn_card)
+                bot.pending_ability = None
+                bot.pending_swap_targets = None
+                await self._bot_sleep(BOT_END_TURN_DELAY_RANGE)
+                await self.end_turn(room_id, check_win=True)
+                return
             discarded_card = bot.hand[swap_index]
             bot.hand[swap_index] = drawn_card
             room.game_state.discard_pile.append(discarded_card)
@@ -1342,6 +1458,8 @@ class GameRoomManager:
 
         bot.pending_ability = None
         bot.pending_swap_targets = None
+        await self._bot_eliminate_own_matching_card(room_id, bot)
+        await self._bot_sleep(BOT_END_TURN_DELAY_RANGE)
         await self.end_turn(room_id, check_win=True)
 
 
