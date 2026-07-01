@@ -1,6 +1,6 @@
 import pytest
 import asyncio
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from Backend.backend import Card, GameRoomManager, Room, Player, GameStatus, GameState, get_card_value
 
 def test_deck_auto_adjustment_below_threshold():
@@ -136,6 +136,7 @@ def test_start_game_records_turn_start_time():
     manager.start_game(room.room_id)
 
     assert room.game_state.turn_started_at is not None
+    assert room.game_state.turn_started_at.tzinfo is not None
 
 
 def test_bot_takes_low_discard_over_high_hand_card():
@@ -248,3 +249,31 @@ def test_cleanup_removes_abandoned_human_game_after_ten_minutes():
     asyncio.run(manager.cleanup_stale_rooms())
 
     assert room.room_id not in manager.rooms
+
+
+def test_turn_timer_accepts_timezone_aware_timestamp():
+    manager = GameRoomManager()
+    room = manager.create_room(username="Player1", play_with_bot=True, turn_timer_enabled=True)
+    room.status = GameStatus.PLAYING
+    room.game_state.game_phase = "playing"
+    room.game_state.current_turn = room.players[0].player_id
+    room.game_state.turn_started_at = datetime.now(timezone.utc) - timedelta(seconds=61)
+
+    assert manager.should_auto_advance_turn(room, datetime.now(timezone.utc)) is True
+
+
+def test_disconnect_removes_player_and_advances_current_turn():
+    manager = GameRoomManager()
+    room = manager.create_room(username="Player1")
+    _, player2_id = manager.join_room(room.room_id, "Player2")
+    manager.start_game(room.room_id)
+    room.game_state.viewing_phase = False
+    room.game_state.game_phase = "playing"
+    room.game_state.current_turn = player2_id
+
+    updated_room, removed_player, deleted_room = manager.disconnect_player_from_room(room.room_id, player2_id)
+
+    assert deleted_room is False
+    assert removed_player.player_id == player2_id
+    assert all(player.player_id != player2_id for player in updated_room.players)
+    assert updated_room.game_state.current_turn == updated_room.players[0].player_id

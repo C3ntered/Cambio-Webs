@@ -20,7 +20,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, ConfigDict
 from typing import List, Dict, Optional
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import uuid
 import secrets
 import string
@@ -32,6 +32,16 @@ from contextlib import asynccontextmanager
 
 # Secure random number generator for game logic
 secure_random = secrets.SystemRandom()
+
+def utc_now() -> datetime:
+    """Return a timezone-aware UTC timestamp for game timers."""
+    return datetime.now(timezone.utc)
+
+def as_utc(value: datetime) -> datetime:
+    """Treat naive timestamps as UTC and convert aware timestamps to UTC."""
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
 
 # ============================================================================
 # Background cleanup task (defined after room_manager is instantiated below)
@@ -62,7 +72,7 @@ async def lifespan(app):
         while True:
             await asyncio.sleep(1)
             try:
-                now = datetime.now()
+                now = utc_now()
                 for room_id, room in list(room_manager.rooms.items()):
                     if (room.status == GameStatus.GRACE_PERIOD
                             and room.grace_period_end
@@ -335,6 +345,8 @@ WAITING_ACTIVE_ROOM_TIMEOUT_SECONDS = 45 * 60
 PLAYING_ABANDONED_ROOM_TIMEOUT_SECONDS = 10 * 60
 PLAYING_ACTIVE_ROOM_TIMEOUT_SECONDS = 20 * 60
 FINISHED_ROOM_TIMEOUT_SECONDS = 10 * 60
+WEBSOCKET_HEARTBEAT_INTERVAL_SECONDS = 10
+WEBSOCKET_HEARTBEAT_TIMEOUT_SECONDS = 25
 
 def get_card_value(card: Card, num_decks: int = 1) -> int:
     """
@@ -603,6 +615,50 @@ class GameRoomManager:
 
         room.last_activity = datetime.now()
         return room, player, False
+
+    def disconnect_player_from_room(self, room_id: str, player_id: str) -> tuple[Optional[Room], Optional[Player], bool]:
+        """
+        Remove a player after their WebSocket disconnects or misses heartbeats.
+
+        This is intentionally stronger than marking a player disconnected:
+        dropped players leave the room entirely so the remaining players can
+        keep playing without creating a new lobby.
+        """
+        resolved_room_id = self._resolve_room_id(room_id)
+        if not resolved_room_id or resolved_room_id not in self.rooms:
+            return None, None, False
+
+        room = self.rooms[resolved_room_id]
+        player = next((p for p in room.players if p.player_id == player_id), None)
+        if not player:
+            return room, None, False
+
+        player_index = room.players.index(player)
+        room.players = [p for p in room.players if p.player_id != player_id]
+        self.remove_connection(resolved_room_id, player_id)
+
+        if not room.players:
+            self.rooms.pop(resolved_room_id, None)
+            self.room_connections.pop(resolved_room_id, None)
+            return None, player, True
+
+        if room.last_winner_id == player_id:
+            room.last_winner_id = None
+        if room.game_state.cambio_caller == player_id:
+            room.game_state.cambio_caller = None
+            room.game_state.cambio_called = False
+            room.game_state.final_round_turns = None
+
+        if room.game_state.current_turn == player_id:
+            next_index = min(player_index, len(room.players) - 1)
+            room.game_state.current_turn = room.players[next_index].player_id
+            room.game_state.turn_started_at = utc_now()
+
+        if room.status in (GameStatus.PLAYING, GameStatus.GRACE_PERIOD) and len(room.players) == 1:
+            self.end_game(resolved_room_id, room.players[0].player_id)
+
+        room.last_activity = datetime.now()
+        return room, player, False
     
     def start_game(self, room_id: str):
         """
@@ -670,7 +726,7 @@ class GameRoomManager:
         
         room.game_state.current_turn = starter_id
         room.game_state.turn_number = 1
-        room.game_state.turn_started_at = datetime.now()
+        room.game_state.turn_started_at = utc_now()
     
     def create_deck(self, num_decks: int = 1) -> List[Card]:
         """
@@ -909,7 +965,7 @@ class GameRoomManager:
         room = self.rooms[resolved_room_id]
         room.status = GameStatus.GRACE_PERIOD
         room.game_state.game_phase = "grace_period"
-        room.grace_period_end = datetime.now() + timedelta(seconds=10)
+        room.grace_period_end = utc_now() + timedelta(seconds=10)
 
     def tally_scores(self, room_id: str) -> Optional[str]:
         """
@@ -974,7 +1030,7 @@ class GameRoomManager:
             next_index = (current_index + 1) % len(room.players)
             room.game_state.current_turn = room.players[next_index].player_id
             room.game_state.turn_number += 1
-            room.game_state.turn_started_at = datetime.now()
+            room.game_state.turn_started_at = utc_now()
             
             if room.game_state.cambio_called:
                 if room.game_state.final_round_turns is None:
@@ -1271,7 +1327,7 @@ class GameRoomManager:
             return False
         if not room.game_state.current_turn or not room.game_state.turn_started_at:
             return False
-        elapsed = (now - room.game_state.turn_started_at).total_seconds()
+        elapsed = (as_utc(now) - as_utc(room.game_state.turn_started_at)).total_seconds()
         return elapsed >= room.turn_timer_seconds
 
     def _non_empty_card_indices(self, player: Player) -> List[int]:
@@ -1776,6 +1832,8 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
     
     player_id = None
     room = None
+    heartbeat_task = None
+    last_client_seen = utc_now()
     
     try:
         # Wait for initial join message
@@ -1841,12 +1899,29 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
                 "room": room.model_dump(mode='json')
             }
         }, exclude_player=player_id)
+
+        async def _heartbeat_loop():
+            nonlocal last_client_seen
+            while True:
+                await asyncio.sleep(WEBSOCKET_HEARTBEAT_INTERVAL_SECONDS)
+                if (utc_now() - last_client_seen).total_seconds() > WEBSOCKET_HEARTBEAT_TIMEOUT_SECONDS:
+                    await websocket.close(code=1001, reason="Heartbeat timeout")
+                    return
+                await websocket.send_json({
+                    "type": "heartbeat",
+                    "data": {
+                        "server_time": utc_now().isoformat()
+                    }
+                })
+
+        heartbeat_task = asyncio.create_task(_heartbeat_loop())
         
         # Main message loop
         while True:
             data = await websocket.receive_text()
             message = json.loads(data)
             msg_type = message.get("type")
+            last_client_seen = utc_now()
             
             room = room_manager.get_room(room_id)
             if not room:
@@ -1855,6 +1930,9 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
             player = next((p for p in room.players if p.player_id == player_id), None)
             if not player:
                 break
+
+            if msg_type == "heartbeat_ack":
+                continue
 
             # Update last_activity on every player action
             room_manager.touch_room(room_id)
@@ -2318,7 +2396,7 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
                         if not room.game_state.current_turn:
                             room.game_state.current_turn = room.players[0].player_id
                         room.game_state.turn_number = 1
-                        room.game_state.turn_started_at = datetime.now()
+                        room.game_state.turn_started_at = utc_now()
                     
                     await room_manager.broadcast_to_room(room_id, {
                         "type": "round_started",
@@ -2614,22 +2692,30 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
     except Exception as e:
         print(f"WebSocket error: {e}")
     finally:
-        # Clean up connection
+        if heartbeat_task:
+            heartbeat_task.cancel()
+            try:
+                await heartbeat_task
+            except (asyncio.CancelledError, Exception):
+                pass
+
+        # Clean up connection and remove dropped players from the room.
         if player_id and room_id:
-            room_manager.remove_connection(room_id, player_id)
-            room = room_manager.get_room(room_id)
-            if room:
-                player = next((p for p in room.players if p.player_id == player_id), None)
-                if player:
-                    player.is_connected = False
-                
-                # Notify other players with updated room state
-                room = room_manager.get_room(room_id)
+            resolved_room_id = room_manager._resolve_room_id(room_id)
+            active_socket = room_manager.room_connections.get(resolved_room_id, {}).get(player_id)
+            if active_socket is websocket:
+                updated_room, removed_player, deleted_room = room_manager.disconnect_player_from_room(room_id, player_id)
+                if updated_room and not deleted_room:
+                    if updated_room.status == GameStatus.PLAYING:
+                        room_manager.schedule_bot_turn(room_id)
+
                 await room_manager.broadcast_to_room(room_id, {
                     "type": "player_left",
                     "data": {
                         "player_id": player_id,
-                        "room": room.model_dump(mode='json')
+                        "username": removed_player.username if removed_player else None,
+                        "message": f"{removed_player.username} disconnected and was removed from the room." if removed_player else "A player disconnected and was removed from the room.",
+                        "room": updated_room.model_dump(mode='json') if updated_room else None
                     }
                 }, exclude_player=player_id)
 

@@ -103,6 +103,20 @@ function getRoomIdFromPath() {
 }
 
 /**
+ * Parse backend timestamps safely across browser and server timezones.
+ *
+ * Older room snapshots may contain naive ISO timestamps. The backend now sends
+ * UTC-aware timer timestamps, and naive values are treated as UTC for backward
+ * compatibility with rooms created before this fix.
+ */
+function parseServerTimestamp(value) {
+    if (!value) return NaN;
+    const text = String(value);
+    const hasTimezone = /(?:Z|[+-]\d{2}:?\d{2})$/.test(text);
+    return new Date(hasTimezone ? text : `${text}Z`).getTime();
+}
+
+/**
  * Create a room or join an existing one, then open the WebSocket connection.
  *
  * When roomId is omitted, this creates a new room using the lobby controls.
@@ -213,6 +227,10 @@ function handleSocketMessage(event) {
     console.log('New Update:', message);
 
     switch (message.type) {
+        case 'heartbeat':
+            sendMessage('heartbeat_ack', { received_at: new Date().toISOString() });
+            break;
+
         case 'game_state':
             // Just update board, no notification
             latestRoomState = message.data.room;
@@ -1526,12 +1544,15 @@ function startTurnTimerDisplay(room, container) {
     container.appendChild(line);
 
     const countdown = line.querySelector('#turn-countdown');
-    const startedAt = new Date(room.game_state.turn_started_at).getTime();
+    const startedAt = parseServerTimestamp(room.game_state.turn_started_at);
+    if (!Number.isFinite(startedAt)) {
+        return;
+    }
     const seconds = Number(room.turn_timer_seconds || 60);
 
     const update = () => {
         const elapsed = Math.floor((Date.now() - startedAt) / 1000);
-        const remaining = Math.max(0, seconds - elapsed);
+        const remaining = Math.min(seconds, Math.max(0, seconds - elapsed));
         if (countdown) countdown.textContent = String(remaining);
     };
 
