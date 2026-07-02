@@ -325,7 +325,7 @@ function handleSocketMessage(event) {
 
                     const thead = document.createElement('thead');
                     const headerRow = document.createElement('tr');
-                    ['Player', 'Score', 'Cards'].forEach(text => {
+                    ['Place', 'Player', 'Score', 'Cards'].forEach(text => {
                         const th = document.createElement('th');
                         th.textContent = text;
                         headerRow.appendChild(th);
@@ -334,13 +334,17 @@ function handleSocketMessage(event) {
                     table.appendChild(thead);
 
                     const tbody = document.createElement('tbody');
-                    // Sort players by score
-                    const sortedPlayers = [...room.players].sort((a, b) => a.score - b.score);
+                    const sortedPlayers = [...room.players].sort(comparePlayersForStandings(room));
 
-                    sortedPlayers.forEach(p => {
+                    sortedPlayers.forEach((p, index) => {
                         const isWinner = p.player_id === winnerId;
                         const tr = document.createElement('tr');
                         if (isWinner) tr.className = 'winner-row';
+
+                        // Place cell
+                        const placeTd = document.createElement('td');
+                        placeTd.textContent = getOrdinal(index + 1);
+                        tr.appendChild(placeTd);
 
                         // Username cell
                         const nameTd = document.createElement('td');
@@ -1581,6 +1585,82 @@ function getSuitSymbol(suit) {
     }
 }
 
+function getShareCardRank(card) {
+    if (!card) return 'X';
+    if (card.rank === 'Ace') return 'A';
+    if (card.rank === 'Jack') return 'J';
+    if (card.rank === 'Queen') return 'Q';
+    if (card.rank === 'King') return 'K';
+    if (card.rank === 'Joker') return 'Joker';
+    return String(card.rank);
+}
+
+function getShareCardMarker(card) {
+    if (!card) return '✖';
+    if (card.suit === 'Joker' || card.rank === 'Joker') return '🃏';
+    return getCardColor(card) === 'red' ? '🔴' : '⚫';
+}
+
+function formatCardForShare(card) {
+    if (!card) return '✖';
+    return `${getShareCardMarker(card)}${getShareCardRank(card)}`;
+}
+
+function formatHandForShare(player) {
+    if (!player?.hand?.length) return 'No cards';
+    return player.hand.map(formatCardForShare).join(' ');
+}
+
+function countRemainingCards(player) {
+    return player?.hand?.filter(Boolean).length || 0;
+}
+
+function comparePlayersForStandings(room) {
+    const cambioCaller = room?.game_state?.cambio_caller;
+    return (a, b) => {
+        const scoreDiff = Number(a.score || 0) - Number(b.score || 0);
+        if (scoreDiff !== 0) return scoreDiff;
+
+        const cardDiff = countRemainingCards(a) - countRemainingCards(b);
+        if (cardDiff !== 0) return cardDiff;
+
+        if (a.player_id === cambioCaller && b.player_id !== cambioCaller) return -1;
+        if (b.player_id === cambioCaller && a.player_id !== cambioCaller) return 1;
+
+        return String(a.username || '').localeCompare(String(b.username || ''));
+    };
+}
+
+function getOrdinal(position) {
+    const mod100 = position % 100;
+    if (mod100 >= 11 && mod100 <= 13) return `${position}th`;
+    switch (position % 10) {
+        case 1: return `${position}st`;
+        case 2: return `${position}nd`;
+        case 3: return `${position}rd`;
+        default: return `${position}th`;
+    }
+}
+
+function buildResultShareText(room) {
+    if (!room?.players?.length) return '';
+
+    const sortedPlayers = [...room.players].sort(comparePlayersForStandings(room));
+    const winner = sortedPlayers[0];
+    const lines = sortedPlayers.map((player, index) => {
+        const position = getOrdinal(index + 1);
+        const hand = formatHandForShare(player);
+        const cards = countRemainingCards(player);
+        return `${position} - ${player.username}: ${player.score} pts, ${cards} card${cards === 1 ? '' : 's'} | ${hand}`;
+    });
+
+    return [
+        `Cambio results${winner ? ` - ${winner.username} won!` : ''}`,
+        'Legend: 🔴 red card, ⚫ black card, 🃏 Joker, ✖ eliminated',
+        ...lines
+    ].join('\n');
+}
+
 /**
  * Render a visible card face into an existing card element.
  */
@@ -1987,12 +2067,7 @@ function shareGameResult() {
     const room = latestRoomState;
     if (!room?.players?.length) return;
 
-    const sortedPlayers = [...room.players].sort((a, b) => a.score - b.score);
-    const winner = sortedPlayers[0];
-    const standings = sortedPlayers
-        .map((player, index) => `${index + 1}. ${player.username}: ${player.score}`)
-        .join('\n');
-    const text = `Cambio results${winner ? ` - ${winner.username} won!` : ''}\n${standings}`;
+    const text = buildResultShareText(room);
 
     if (navigator.share) {
         navigator.share({ title: 'Cambio results', text }).catch(() => {});
