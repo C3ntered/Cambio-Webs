@@ -262,6 +262,43 @@ def test_turn_timer_accepts_timezone_aware_timestamp():
     assert manager.should_auto_advance_turn(room, datetime.now(timezone.utc)) is True
 
 
+def test_empty_hand_does_not_end_round_before_cambio():
+    manager = GameRoomManager()
+    room = manager.create_room(username="Player1")
+    manager.join_room(room.room_id, "Player2")
+    manager.start_game(room.room_id)
+    room.game_state.viewing_phase = False
+    room.game_state.game_phase = "playing"
+    empty_hand_player = room.players[0]
+    empty_hand_player.hand = [None] * len(empty_hand_player.hand)
+    room.game_state.current_turn = empty_hand_player.player_id
+
+    asyncio.run(manager.end_turn(room.room_id, check_win=True))
+
+    assert room.status == GameStatus.PLAYING
+    assert room.game_state.game_phase == "playing"
+    assert room.game_state.current_turn == room.players[1].player_id
+
+
+def test_cambio_starts_scoring_only_after_every_other_player_turn():
+    manager = GameRoomManager()
+    room = manager.create_room(username="Player1")
+    manager.join_room(room.room_id, "Player2")
+    manager.join_room(room.room_id, "Player3")
+    manager.start_game(room.room_id)
+    caller = room.players[0]
+    room.game_state.current_turn = caller.player_id
+    room.game_state.cambio_called = True
+    room.game_state.cambio_caller = caller.player_id
+
+    assert manager.next_turn(room.room_id) is None
+    assert room.game_state.final_round_turns == 2
+    assert manager.next_turn(room.room_id) is None
+    assert room.status == GameStatus.PLAYING
+    assert manager.next_turn(room.room_id) == "GRACE_PERIOD"
+    assert room.status == GameStatus.GRACE_PERIOD
+
+
 def test_disconnect_removes_player_and_advances_current_turn():
     manager = GameRoomManager()
     room = manager.create_room(username="Player1")

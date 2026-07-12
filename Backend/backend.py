@@ -1628,8 +1628,9 @@ class GameRoomManager:
         """
         Advance to the next player, broadcast state, and schedule bots.
 
-        If ``check_win`` is true, the method checks whether the just-finished
-        action eliminated a player's last card and broadcasts game-end state.
+        ``check_win`` is retained for compatibility with existing action
+        handlers, but an empty hand does not end a Cambio round. Scoring only
+        begins after Cambio is called and every other player finishes one turn.
         """
         cambio_result = self.next_turn(room_id)
         room = self.rooms.get(room_id)
@@ -1641,12 +1642,6 @@ class GameRoomManager:
         if cambio_result == "GRACE_PERIOD":
             await self.broadcast_grace_period_started(room_id, "Final round ended! Grace Period started.")
             return None
-        if check_win:
-            winner_id = self.check_win_condition(room_id)
-            if winner_id:
-                self.end_game(room_id, winner_id)
-                await self.broadcast_game_ended(room_id, winner_id)
-                return winner_id
         self.schedule_bot_turn(room_id)
         return None
 
@@ -2503,6 +2498,16 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
                     await websocket.send_json({
                         "type": "error",
                         "message": "Target player not found"
+                    })
+                    continue
+
+                # Once Cambio is called, the caller's hand is frozen for the
+                # rest of the final round. Other players may still take their
+                # turns, but cannot eliminate or replace one of the caller's cards.
+                if room.game_state.cambio_caller == target_id:
+                    await websocket.send_json({
+                        "type": "error",
+                        "message": "Cannot change the hand of the player who called Cambio"
                     })
                     continue
                 
