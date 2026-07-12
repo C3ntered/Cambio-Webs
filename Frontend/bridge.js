@@ -86,6 +86,11 @@ let activeLookIndicators = {}; // State of cards being looked at
 const actionHistory = [];
 let turnTimerInterval = null;
 
+// Keep draw swaps slow enough for every player to see the hand slot being
+// replaced before either card moves.
+const DRAW_SWAP_STAGE_MS = 350;
+const DRAW_SWAP_TRAVEL_MS = 1200;
+
 /**
  * Build a shareable direct-join URL for a room code.
  */
@@ -432,7 +437,12 @@ function handleSocketMessage(event) {
             eliminationTarget = null;
             clearPersistentLookIndicators();
             latestRoomState = message.data.room;
-            renderBoard(message.data.room, message.data.your_player_id || playerContext.playerId);
+            // A swap is followed by turn_ended immediately. Keep the old
+            // board in place until the exchange finishes so its highlighted
+            // replacement slot is not erased halfway through the animation.
+            if (!(message.type === 'turn_ended' && isAnimating)) {
+                renderBoard(message.data.room, message.data.your_player_id || playerContext.playerId);
+            }
             break;
         case 'wrong_sacrifice_penalty':
             pendingDrawnCard = null;
@@ -2301,6 +2311,7 @@ function animateDrawSwap(playerId, cardIndex, drawSource, callback) {
     }
 
     const source = findDrawSwapSourceElement(drawSource);
+    const discardDestination = findDrawSwapDiscardDestination();
     const targetRect = target.getBoundingClientRect();
     const sourceRect = source
         ? source.getBoundingClientRect()
@@ -2310,41 +2321,73 @@ function animateDrawSwap(playerId, cardIndex, drawSource, callback) {
             width: targetRect.width,
             height: targetRect.height
         };
+    const discardRect = discardDestination
+        ? discardDestination.getBoundingClientRect()
+        : {
+            top: targetRect.top + targetRect.height + 56,
+            left: targetRect.left,
+            width: targetRect.width,
+            height: targetRect.height
+        };
 
     const incoming = createHiddenCardClone(source, sourceRect, targetRect);
     const outgoing = target.cloneNode(true);
     outgoing.classList.add('swapping-clone');
 
+    incoming.classList.add('swap-incoming');
+    outgoing.classList.add('swap-outgoing');
+    addSwapMotionLabel(incoming, 'Into hand');
+    addSwapMotionLabel(outgoing, 'To discard');
+
     styleFixedClone(outgoing, targetRect);
     document.body.appendChild(outgoing);
-    target.style.visibility = 'hidden';
+    incoming.style.opacity = '0';
+    outgoing.style.opacity = '0';
+
+    // Leave a highly visible docking marker in the exact hand slot that will
+    // change. This makes the replacement clear even when the piles sit to one
+    // side of the table on a smaller screen.
+    target.classList.add('swap-target-slot');
+    if (source) source.classList.add('swap-source-pulse');
 
     void incoming.offsetHeight;
 
-    requestAnimationFrame(() => {
-        incoming.style.top = targetRect.top + 'px';
-        incoming.style.left = targetRect.left + 'px';
-        incoming.style.width = targetRect.width + 'px';
-        incoming.style.height = targetRect.height + 'px';
-
-        if (source) {
-            outgoing.style.top = sourceRect.top + 'px';
-            outgoing.style.left = sourceRect.left + 'px';
-            outgoing.style.width = sourceRect.width + 'px';
-            outgoing.style.height = sourceRect.height + 'px';
-        } else {
-            outgoing.style.transform = 'translateY(40px) scale(0.85)';
-            outgoing.style.opacity = '0';
-        }
-    });
-
     setTimeout(() => {
-        if (incoming.parentNode) document.body.removeChild(incoming);
-        if (outgoing.parentNode) document.body.removeChild(outgoing);
-        target.style.visibility = 'visible';
-        isAnimating = false;
-        if (callback) callback();
-    }, 700);
+        // The real pile card is replaced by the moving clone, avoiding a
+        // distracting duplicate at the departure point.
+        const originalSourceVisibility = source?.style.visibility;
+        if (source) source.style.visibility = 'hidden';
+
+        incoming.style.opacity = '1';
+        outgoing.style.opacity = '1';
+
+        requestAnimationFrame(() => {
+            incoming.style.top = targetRect.top + 'px';
+            incoming.style.left = targetRect.left + 'px';
+            incoming.style.width = targetRect.width + 'px';
+            incoming.style.height = targetRect.height + 'px';
+
+            // A card drawn from the deck is always discarded to the discard
+            // pile, not back to the deck. Discard draws naturally travel back
+            // to that same pile after being exchanged.
+            outgoing.style.top = discardRect.top + 'px';
+            outgoing.style.left = discardRect.left + 'px';
+            outgoing.style.width = discardRect.width + 'px';
+            outgoing.style.height = discardRect.height + 'px';
+        });
+
+        setTimeout(() => {
+            if (incoming.parentNode) document.body.removeChild(incoming);
+            if (outgoing.parentNode) document.body.removeChild(outgoing);
+            target.classList.remove('swap-target-slot');
+            if (source) {
+                source.classList.remove('swap-source-pulse');
+                source.style.visibility = originalSourceVisibility || '';
+            }
+            isAnimating = false;
+            if (callback) callback();
+        }, DRAW_SWAP_TRAVEL_MS);
+    }, DRAW_SWAP_STAGE_MS);
 }
 
 function findDrawSwapSourceElement(drawSource) {
@@ -2356,6 +2399,13 @@ function findDrawSwapSourceElement(drawSource) {
     }
 
     return document.getElementById('deck-card') || document.getElementById('deck-pile');
+}
+
+/**
+ * The displaced hand card always joins the discard pile after a draw swap.
+ */
+function findDrawSwapDiscardDestination() {
+    return document.querySelector('#top-card .game-card') || document.getElementById('discard-pile');
 }
 
 function createHiddenCardClone(source, sourceRect, targetRect) {
@@ -2372,6 +2422,13 @@ function createHiddenCardClone(source, sourceRect, targetRect) {
     clone.style.height = (sourceRect.height || targetRect.height) + 'px';
     document.body.appendChild(clone);
     return clone;
+}
+
+function addSwapMotionLabel(clone, text) {
+    const label = document.createElement('span');
+    label.className = 'swap-motion-label';
+    label.textContent = text;
+    clone.appendChild(label);
 }
 
 function styleFixedClone(clone, rect) {

@@ -585,6 +585,40 @@
             border-width: 4px !important;
         }
 
+        .swap-target-slot {
+            position: relative;
+            z-index: 2;
+            animation: swap-target-pulse 0.7s ease-in-out infinite;
+            border-color: #ffca28 !important;
+            border-width: 4px !important;
+            box-shadow: 0 0 0 6px rgba(255, 202, 40, 0.38), 0 0 24px 8px rgba(255, 152, 0, 0.55) !important;
+        }
+
+        .swap-target-slot::before {
+            content: "REPLACING";
+            position: absolute;
+            left: 50%;
+            top: -29px;
+            z-index: 3;
+            transform: translateX(-50%);
+            padding: 4px 7px;
+            border-radius: 999px;
+            background: #5d4037;
+            color: #fff;
+            font-size: 10px;
+            font-weight: 800;
+            letter-spacing: 0.06em;
+            line-height: 1;
+            white-space: nowrap;
+            pointer-events: none;
+        }
+
+        .swap-source-pulse {
+            animation: swap-source-pulse 0.7s ease-in-out infinite;
+            outline: 3px solid #66bb6a;
+            outline-offset: 4px;
+        }
+
         @keyframes pulse-orange {
             0% {
                 box-shadow: 0 0 0 0 rgba(255, 152, 0, 0.7);
@@ -596,6 +630,26 @@
 
             100% {
                 box-shadow: 0 0 0 0 rgba(255, 152, 0, 0);
+            }
+        }
+
+        @keyframes swap-target-pulse {
+            0%, 100% {
+                transform: scale(1);
+            }
+
+            50% {
+                transform: scale(1.08);
+            }
+        }
+
+        @keyframes swap-source-pulse {
+            0%, 100% {
+                outline-color: rgba(102, 187, 106, 0.4);
+            }
+
+            50% {
+                outline-color: rgba(102, 187, 106, 1);
             }
         }
 
@@ -728,9 +782,36 @@
             pointer-events: none;
             position: fixed;
             z-index: 9999;
-            transition: top 0.7s ease-in-out, left 0.7s ease-in-out, transform 0.7s ease-in-out;
-            pointer-events: none;
+            transition: top 1.2s cubic-bezier(0.22, 0.61, 0.36, 1), left 1.2s cubic-bezier(0.22, 0.61, 0.36, 1), width 1.2s cubic-bezier(0.22, 0.61, 0.36, 1), height 1.2s cubic-bezier(0.22, 0.61, 0.36, 1), transform 1.2s cubic-bezier(0.22, 0.61, 0.36, 1), opacity 0.16s ease-out;
             box-shadow: 0 10px 20px rgba(0, 0, 0, 0.4);
+            will-change: top, left, width, height, transform, opacity;
+        }
+
+        .swapping-clone.swap-incoming {
+            border-color: #43a047 !important;
+            box-shadow: 0 0 0 4px rgba(67, 160, 71, 0.8), 0 10px 22px rgba(0, 0, 0, 0.45);
+        }
+
+        .swapping-clone.swap-outgoing {
+            border-color: #ef6c00 !important;
+            box-shadow: 0 0 0 4px rgba(239, 108, 0, 0.8), 0 10px 22px rgba(0, 0, 0, 0.45);
+        }
+
+        .swap-motion-label {
+            position: absolute;
+            left: 50%;
+            top: -29px;
+            transform: translateX(-50%);
+            z-index: 2;
+            padding: 4px 7px;
+            border-radius: 999px;
+            background: #263238;
+            color: #fff;
+            font-size: 10px;
+            font-weight: 800;
+            letter-spacing: 0.04em;
+            line-height: 1;
+            white-space: nowrap;
         }
 
         /* Shared Card Styles */
