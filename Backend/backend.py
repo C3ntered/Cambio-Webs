@@ -242,6 +242,7 @@ class Player(BaseModel):
     pending_drawn_card: Optional[Card] = None  # card drawn, awaiting swap or discard choice
     pending_ability: Optional[str] = None  # Ability waiting to be used or skipped
     pending_swap_targets: Optional[Dict] = None # Stores targets for look_and_swap decision phase
+    pending_replacement_target: Optional[Dict] = None  # Opponent slot eliminated; replacement still owed
     is_bot: bool = False
 
 class GameState(BaseModel):
@@ -263,6 +264,7 @@ class GameState(BaseModel):
     cambio_caller: Optional[str] = None
     final_round_turns: Optional[int] = None
     turn_started_at: Optional[datetime] = None
+    turn_ready_at: Optional[datetime] = None  # short transition lock before the next player may act
 
 class Room(BaseModel):
     """
@@ -1141,6 +1143,13 @@ class GameRoomManager:
             if source_pid is None or source_idx is None or target_pid is None or target_idx is None:
                 return False
 
+            if source_pid == target_pid:
+                await self.send_to_player(room_id, acting_player.player_id, {
+                    "type": "error",
+                    "message": "Choose cards belonging to two different players. You cannot swap two cards in the same hand."
+                })
+                return False
+
             # Immunity Check: Cannot swap with a player who called Cambio
             if room.game_state.cambio_caller:
                 if room.game_state.cambio_caller == source_pid or room.game_state.cambio_caller == target_pid:
@@ -1193,6 +1202,13 @@ class GameRoomManager:
             first_player, first_idx = resolve_target(first)
             second_player, second_idx = resolve_target(second)
             if not first_player or not second_player:
+                return False
+
+            if first_player.player_id == second_player.player_id:
+                await self.send_to_player(room_id, acting_player.player_id, {
+                    "type": "error",
+                    "message": "Choose cards belonging to two different players. You cannot swap two cards in the same hand."
+                })
                 return False
 
             # Immunity Check
@@ -1499,6 +1515,13 @@ class GameRoomManager:
             return
         if room.game_state.current_turn != bot_player_id or room.game_state.viewing_phase:
             return
+        if room.game_state.turn_ready_at:
+            wait_seconds = (as_utc(room.game_state.turn_ready_at) - utc_now()).total_seconds()
+            if wait_seconds > 0:
+                await asyncio.sleep(wait_seconds)
+                room = self.get_room(room_id)
+                if not room or room.game_state.current_turn != bot_player_id:
+                    return
 
         bot = next((p for p in room.players if p.player_id == bot_player_id and p.is_bot), None)
         if not bot:
@@ -1632,9 +1655,25 @@ class GameRoomManager:
         handlers, but an empty hand does not end a Cambio round. Scoring only
         begins after Cambio is called and every other player finishes one turn.
         """
+        room = self.rooms.get(room_id)
+        outgoing = None
+        if room:
+            outgoing = next((p for p in room.players if p.player_id == room.game_state.current_turn), None)
+            # A turn must never leak client action state into that player's next turn.
+            if outgoing:
+                if outgoing.pending_drawn_card:
+                    room.game_state.discard_pile.append(outgoing.pending_drawn_card)
+                outgoing.pending_drawn_card = None
+                outgoing.pending_ability = None
+                outgoing.pending_swap_targets = None
+                outgoing.pending_replacement_target = None
+                outgoing.last_draw_source = None
+                outgoing.last_drawn_card = None
+
         cambio_result = self.next_turn(room_id)
         room = self.rooms.get(room_id)
         if room:
+            room.game_state.turn_ready_at = utc_now() + timedelta(seconds=2.5)
             await self.broadcast_to_room(room_id, {
                 "type": "turn_ended",
                 "data": {"room": room.model_dump(mode="json")}
@@ -1929,6 +1968,25 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
             if msg_type == "heartbeat_ack":
                 continue
 
+            if player.pending_replacement_target and msg_type not in {"give_replacement", "heartbeat_ack"}:
+                await websocket.send_json({
+                    "type": "error",
+                    "message": "Give the eliminated player a replacement card before taking another action"
+                })
+                continue
+
+            # The next player is visible immediately, but drawing/calling is held
+            # briefly so everyone can follow the completed action.
+            if msg_type in {"draw_card", "draw_from_discard", "call_cambio"}:
+                ready_at = room.game_state.turn_ready_at
+                if ready_at and utc_now() < as_utc(ready_at):
+                    remaining = max(0.1, (as_utc(ready_at) - utc_now()).total_seconds())
+                    await websocket.send_json({
+                        "type": "error",
+                        "message": f"Next turn begins in {remaining:.1f}s"
+                    })
+                    continue
+
             # Update last_activity on every player action
             room_manager.touch_room(room_id)
             
@@ -2005,6 +2063,10 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
                             "type": "wrong_sacrifice_penalty",
                             "data": {
                                 "message": "Wrong card! That doesn't match the discard. You drew a penalty card.",
+                                "revealed_card": played_card.model_dump(mode='json'),
+                                "target_player_id": player_id,
+                                "card_index": hand_index,
+                                "duration": 3000,
                                 "room": room.model_dump(mode='json')
                             }
                         })
@@ -2201,7 +2263,7 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
                     await room_manager.broadcast_to_room(room_id, {
                         "type": "cards_swapped",
                         "data": {
-                            "message": f"{player.username} swapped a drawn card into their hand.",
+                            "message": f"{player.username} swapped the drawn card into card slot #{hand_index + 1}.",
                             "player1_id": player.player_id,
                             "card1_index": hand_index,
                             "draw_source": player.last_draw_source,
@@ -2475,7 +2537,6 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
                 elimination_data = message.get("data", {})
                 target_id = elimination_data.get("target_player_id")
                 target_index = elimination_data.get("card_index")
-                replacement_index = elimination_data.get("replacement_card_index")
 
                 if target_id is None or target_index is None:
                     await websocket.send_json({
@@ -2511,21 +2572,6 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
                     })
                     continue
                 
-                # Check replacement card if targeting opponent
-                if target_id != player_id:
-                    if replacement_index is None:
-                        await websocket.send_json({
-                            "type": "error",
-                            "message": "You must select a card to give to the opponent."
-                        })
-                        continue
-                    if replacement_index < 0 or replacement_index >= len(player.hand):
-                         await websocket.send_json({
-                            "type": "error",
-                            "message": "Invalid replacement card index"
-                        })
-                         continue
-
                 # Can eliminate anyone's card including your own (e.g. when it's not your turn)
 
                 if target_index < 0 or target_index >= len(target_player.hand) or target_player.hand[target_index] is None:
@@ -2538,10 +2584,6 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
                 top_card = room.game_state.discard_pile[-1]
                 target_card = target_player.hand[target_index]
 
-                if target_id != player_id and player.hand[replacement_index] is None:
-                    await websocket.send_json({"type": "error", "message": "Cannot replace with an empty slot"})
-                    continue
-
                 if target_card.rank != top_card.rank:
                     # Wrong guess - penalty: draw a card and end turn
                     ok = await room_manager.apply_penalty_draw(room_id, player, websocket)
@@ -2553,6 +2595,10 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
                             "type": "wrong_sacrifice_penalty",
                             "data": {
                                 "message": "Wrong guess! That card doesn't match the discard. You drew a penalty card.",
+                                "revealed_card": target_card.model_dump(mode='json'),
+                                "target_player_id": target_id,
+                                "card_index": target_index,
+                                "duration": 3000,
                                 "room": room.model_dump(mode='json')
                             }
                         })
@@ -2564,7 +2610,11 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
                                 "room": room.model_dump(mode='json')
                             }
                         }, exclude_player=player_id)
-                        await room_manager.end_turn(room_id, check_win=True)
+                        # Eliminations may be attempted outside the guesser's
+                        # turn; a bad off-turn guess must not advance somebody
+                        # else's active turn.
+                        if room.game_state.current_turn == player_id:
+                            await room_manager.end_turn(room_id, check_win=True)
                     continue
 
                 removed_card = target_player.hand[target_index]
@@ -2573,11 +2623,11 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
                 
                 msg_extra = ""
                 if target_id != player_id:
-                    replacement_card = player.hand[replacement_index]
-                    player.hand[replacement_index] = None
-                    target_player.hand[target_index] = replacement_card
-
-                    msg_extra = " and gave them a replacement card"
+                    player.pending_replacement_target = {
+                        "target_player_id": target_id,
+                        "card_index": target_index
+                    }
+                    msg_extra = "; choose one of their cards as the replacement"
                 
                 room = room_manager.get_room(room_id)
                 await room_manager.broadcast_to_room(room_id, {
@@ -2585,8 +2635,38 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
                     "data": {
                         "initiator": player_id,
                         "target_player_id": target_id,
+                        "card_index": target_index,
+                        "replacement_required": target_id != player_id,
                         "removed_card": removed_card.model_dump(mode='json'),
                         "message": f"{player.username} eliminated {target_player.username}'s card{msg_extra}.",
+                        "room": room.model_dump(mode='json')
+                    }
+                })
+
+            elif msg_type == "give_replacement":
+                pending = player.pending_replacement_target
+                replacement_index = message.get("data", {}).get("replacement_card_index")
+                if not pending:
+                    await websocket.send_json({"type": "error", "message": "No replacement card is currently owed"})
+                    continue
+                target_player = next((p for p in room.players if p.player_id == pending["target_player_id"]), None)
+                target_index = pending["card_index"]
+                if (not target_player or replacement_index is None or replacement_index < 0
+                        or replacement_index >= len(player.hand) or player.hand[replacement_index] is None):
+                    await websocket.send_json({"type": "error", "message": "Choose one of your remaining cards as the replacement"})
+                    continue
+                replacement_card = player.hand[replacement_index]
+                player.hand[replacement_index] = None
+                target_player.hand[target_index] = replacement_card
+                player.pending_replacement_target = None
+                await room_manager.broadcast_to_room(room_id, {
+                    "type": "replacement_given",
+                    "data": {
+                        "message": f"{player.username} gave card #{replacement_index + 1} to {target_player.username}'s slot #{target_index + 1}.",
+                        "player1_id": player.player_id,
+                        "card1_index": replacement_index,
+                        "player2_id": target_player.player_id,
+                        "card2_index": target_index,
                         "room": room.model_dump(mode='json')
                     }
                 })

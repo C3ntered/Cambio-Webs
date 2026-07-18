@@ -85,6 +85,7 @@ let isAnimating = false;
 let activeLookIndicators = {}; // State of cards being looked at
 const actionHistory = [];
 let turnTimerInterval = null;
+let turnGraceInterval = null;
 
 // Keep draw swaps slow enough for every player to see the hand slot being
 // replaced before either card moves.
@@ -262,6 +263,10 @@ function handleSocketMessage(event) {
             }
             recordAction(message.data.message || 'A card action occurred', message.type === 'player_penalty_draw' ? 'alert' : 'swap');
             latestRoomState = message.data.room;
+            if (message.type === 'card_eliminated' && message.data.initiator === playerContext.playerId && message.data.replacement_required) {
+                eliminationTarget = { pid: message.data.target_player_id, idx: message.data.card_index, replacement: true };
+                notify('Card eliminated. Now tap one of your cards to give as the replacement.');
+            }
             renderBoard(message.data.room, message.data.your_player_id || playerContext.playerId);
             break;
 
@@ -280,6 +285,7 @@ function handleSocketMessage(event) {
         case 'deck_reshuffled':
         case 'cambio_called':
             notify(message.data.message);
+            if (message.type === 'cambio_called') showCambioAnnouncement(message.data.message);
             recordAction(message.data.message, message.type === 'cambio_called' ? 'alert' : 'draw');
             latestRoomState = message.data.room;
             renderBoard(message.data.room, message.data.your_player_id || playerContext.playerId);
@@ -446,11 +452,22 @@ function handleSocketMessage(event) {
             break;
         case 'wrong_sacrifice_penalty':
             pendingDrawnCard = null;
-            alert(message.data.message || 'Wrong card! You drew a penalty card.');
             latestRoomState = message.data.room;
             renderBoard(message.data.room, playerContext.playerId);
+            if (message.data.revealed_card && message.data.target_player_id !== undefined) {
+                revealCardTemporarily(message.data.target_player_id, message.data.card_index, message.data.revealed_card, message.data.duration || 3000);
+            }
             notify(`Penalty: You drew a face-down penalty card.`);
             recordAction(message.data.message || 'Penalty: drew a face-down penalty card', 'alert');
+            break;
+        case 'replacement_given':
+            eliminationTarget = null;
+            latestRoomState = message.data.room;
+            notify(message.data.message);
+            recordAction(message.data.message, 'swap');
+            renderBoard(message.data.room, playerContext.playerId);
+            if (message.data.player1_id !== undefined) highlightCard(message.data.player1_id, message.data.card1_index);
+            if (message.data.player2_id !== undefined) highlightCard(message.data.player2_id, message.data.card2_index);
             break;
         case 'cards_swapped':
             console.log('cards_swapped message received', message.data);
@@ -655,7 +672,7 @@ function handleSocketMessage(event) {
                 pendingDrawnCard = null;
                 renderBoard(latestRoomState, playerContext.playerId); // Refresh UI to hide panel
             }
-            alert(message.message);
+            notify(message.message || 'That move is not allowed.', 3500);
             break;
         default:
             console.warn('Unhandled message', message);
@@ -694,15 +711,21 @@ function hasBlockedTurnInteraction(room = latestRoomState) {
         !!me?.pending_ability ||
         selectingTargets ||
         pendingSwapDecision ||
-        !!eliminationTarget;
+        !!eliminationTarget ||
+        !!me?.pending_replacement_target;
+}
+
+function isTurnReady(room = latestRoomState) {
+    const readyAt = parseServerTimestamp(room?.game_state?.turn_ready_at);
+    return !Number.isFinite(readyAt) || readyAt <= Date.now();
 }
 
 function canDrawFromDeck(room = latestRoomState) {
-    return isMyTurn(room) && !hasPendingDraw(room) && !hasBlockedTurnInteraction(room);
+    return isMyTurn(room) && isTurnReady(room) && !hasPendingDraw(room) && !hasBlockedTurnInteraction(room);
 }
 
 function canUseDiscardPile(room = latestRoomState) {
-    if (!isMyTurn(room) || hasBlockedTurnInteraction(room)) {
+    if (!isMyTurn(room) || !isTurnReady(room) || hasBlockedTurnInteraction(room)) {
         return false;
     }
 
@@ -758,19 +781,49 @@ function playCard(card, cardIndex, abilityPayload = null) {
  * the current player's cards to give as a replacement if the guess is correct.
  */
 function startElimination(targetPlayerId, cardIndex) {
-    eliminationTarget = { pid: targetPlayerId, idx: cardIndex };
-    notify("Target selected! Now click one of YOUR cards to give to them.");
-    renderBoard(latestRoomState, playerContext.playerId);
+    if (eliminationTarget) return;
+    sendMessage('eliminate_card', { target_player_id: targetPlayerId, card_index: cardIndex });
+    notify(`Checking ${getPlayerName(targetPlayerId)}'s card #${cardIndex + 1}…`);
 }
 
 function completeElimination(replacementCardIndex) {
     if (!eliminationTarget) return;
-    sendMessage('eliminate_card', {
-        target_player_id: eliminationTarget.pid,
-        card_index: eliminationTarget.idx,
+    sendMessage('give_replacement', {
         replacement_card_index: replacementCardIndex
     });
-    eliminationTarget = null;
+}
+
+function getPlayerName(playerId) {
+    return latestRoomState?.players?.find(p => p.player_id === playerId)?.username || 'player';
+}
+
+function revealCardTemporarily(playerId, cardIndex, card, duration = 3000) {
+    if (!activeLookIndicators[playerId]) activeLookIndicators[playerId] = {};
+    activeLookIndicators[playerId][cardIndex] = 'PERSIST';
+    renderBoard(latestRoomState, playerContext.playerId);
+    const button = findCardElement(playerId, cardIndex, latestRoomState, playerContext.playerId);
+    if (button) {
+        renderCardContent(button, card);
+        button.classList.add('wrong-guess-reveal');
+    }
+    setTimeout(() => {
+        if (activeLookIndicators[playerId]) delete activeLookIndicators[playerId][cardIndex];
+        renderBoard(latestRoomState, playerContext.playerId);
+    }, duration);
+}
+
+function showCambioAnnouncement(message) {
+    let banner = document.getElementById('cambio-announcement');
+    if (!banner) {
+        banner = document.createElement('div');
+        banner.id = 'cambio-announcement';
+        document.body.appendChild(banner);
+    }
+    banner.textContent = `CAMBIO! ${message || ''}`;
+    banner.classList.remove('show');
+    void banner.offsetWidth;
+    banner.classList.add('show');
+    setTimeout(() => banner.classList.remove('show'), 3200);
 }
 
 /**
@@ -840,14 +893,20 @@ function startAbilitySelection(ability) {
 
     if (panel && nameDisplay && desc) {
         panel.style.display = 'block';
-        nameDisplay.innerText = ability;
+        const abilityNames = {
+            peek_self: 'Peek at your card',
+            peek_other: "Peek at an opponent's card",
+            blind_swap: 'Blind swap between players',
+            look_and_swap: 'Look, then optionally swap'
+        };
+        nameDisplay.innerText = abilityNames[ability] || ability;
         if (controls) controls.innerHTML = '';
 
         let instructions = "";
-        if (ability === 'peek_self') instructions = "Click one of YOUR cards to peek at it.";
-        else if (ability === 'peek_other') instructions = "Click one of an OPPONENT'S cards to peek at it.";
-        else if (ability === 'blind_swap') instructions = "Click ANY two cards to swap them.";
-        else if (ability === 'look_and_swap') instructions = "Click ANY two cards to look at them. (Swap optional)";
+        if (ability === 'peek_self') instructions = "You discarded this ability card. Tap one of YOUR cards to peek at it.";
+        else if (ability === 'peek_other') instructions = "You discarded this ability card. Tap one OPPONENT card to peek at it.";
+        else if (ability === 'blind_swap') instructions = "You discarded this ability card. Choose one card from each of TWO DIFFERENT players to swap.";
+        else if (ability === 'look_and_swap') instructions = "You discarded this ability card. Choose one card from each of TWO DIFFERENT players, look at both, then decide whether to swap.";
 
         desc.innerText = instructions;
     }
@@ -888,6 +947,12 @@ function handleCardClick(playerId, cardIndex, isOwnCard) {
         } else if (selectedTargets.length === 2) {
             const first = selectedTargets[0];
             const second = selectedTargets[1];
+            if (first.player_id === second.player_id) {
+                notify('Choose the second card from a different player.');
+                selectedTargets = [first];
+                renderBoard(latestRoomState, playerContext.playerId);
+                return;
+            }
 
             // Immunity Check: Cannot target a player who called Cambio
             if (latestRoomState.game_state.cambio_caller) {
@@ -912,6 +977,12 @@ function handleCardClick(playerId, cardIndex, isOwnCard) {
         if (selectedTargets.length < 2) {
             notify(`Selected ${selectedTargets.length}/2 cards.`);
         } else {
+            if (selectedTargets[0].player_id === selectedTargets[1].player_id) {
+                notify('Choose the second card from a different player.');
+                selectedTargets = [selectedTargets[0]];
+                renderBoard(latestRoomState, playerContext.playerId);
+                return;
+            }
             // Just send the targets. The decision comes later.
             sendMessage('use_ability', {
                 first_target: selectedTargets[0],
@@ -1090,6 +1161,7 @@ function renderBoard(room, yourPlayerId) {
                     turnIndicator.innerText = `Waiting for ${currentPlayer.username}${currentPlayer.is_bot ? ' (Bot)' : ''}`;
                 }
                 startTurnTimerDisplay(room, turnIndicator);
+                startTurnGraceDisplay(room, turnIndicator);
             } else {
                 turnIndicator.innerText = 'Waiting for players...';
             }
@@ -1324,6 +1396,7 @@ function renderBoard(room, yourPlayerId) {
                 me.hand.forEach((card, index) => {
                     const btn = document.createElement('button');
                     btn.setAttribute('data-index', index);
+                    btn.setAttribute('data-card-number', index + 1);
 
                     // Explicitly set grid position to prevent reflow issues
                     const col = Math.floor(index / 2) + 1;
@@ -1415,12 +1488,14 @@ function renderBoard(room, yourPlayerId) {
                 section.appendChild(nameEl);
                 const cardsDiv = document.createElement('div');
                 cardsDiv.className = 'opponent-cards';
+                section.style.setProperty('--card-columns', Math.max(1, Math.ceil(player.hand.length / 2)));
 
                 // Insert in index order - enforce column-major layout
                 player.hand.forEach((_, index) => {
                     const card = player.hand[index];
                     const btn = document.createElement('button');
                     btn.setAttribute('data-index', index);
+                    btn.setAttribute('data-card-number', index + 1);
 
                     // Explicitly set grid position to prevent reflow issues
                     const col = Math.floor(index / 2) + 1;
@@ -1532,6 +1607,27 @@ function renderBoard(room, yourPlayerId) {
     }
 
     applyIndicators();
+}
+
+function startTurnGraceDisplay(room, container) {
+    if (turnGraceInterval !== null) clearInterval(turnGraceInterval);
+    const readyAt = parseServerTimestamp(room?.game_state?.turn_ready_at);
+    if (!Number.isFinite(readyAt) || readyAt <= Date.now()) return;
+    const line = document.createElement('div');
+    line.className = 'turn-grace-line';
+    container.appendChild(line);
+    const update = () => {
+        const remaining = Math.max(0, readyAt - Date.now());
+        if (!remaining) {
+            clearInterval(turnGraceInterval);
+            turnGraceInterval = null;
+            if (latestRoomState) renderBoard(latestRoomState, playerContext.playerId);
+            return;
+        }
+        line.textContent = `Get ready… ${(remaining / 1000).toFixed(1)}s`;
+    };
+    update();
+    turnGraceInterval = setInterval(update, 100);
 }
 
 /**
