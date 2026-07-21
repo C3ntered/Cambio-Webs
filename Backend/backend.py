@@ -77,20 +77,7 @@ async def lifespan(app):
                     if (room.status == GameStatus.GRACE_PERIOD
                             and room.grace_period_end
                             and now >= room.grace_period_end):
-                        winner_id = room_manager.tally_scores(room_id)
-                        room = room_manager.get_room(room_id)
-                        if room and winner_id:
-                            await room_manager.broadcast_to_room(room_id, {
-                                "type": "game_ended",
-                                "data": {
-                                    "winner_id": winner_id,
-                                    "winner_username": next(
-                                        (p.username for p in room.players if p.player_id == winner_id),
-                                        "Unknown"
-                                    ),
-                                    "room": room.model_dump(mode='json')
-                                }
-                            })
+                        await room_manager.complete_scoring(room_id)
                     if room_manager.should_auto_advance_turn(room, now):
                         await room_manager.auto_advance_timed_out_turn(room_id)
             except Exception as e:
@@ -203,12 +190,14 @@ class GameStatus(str, Enum):
     Lifecycle states for a room.
 
     WAITING rooms are lobbies, PLAYING rooms have an active round, GRACE_PERIOD
-    rooms are resolving final eliminations before scoring, and FINISHED rooms
-    have a winner but may still be reused for another round.
+    rooms are resolving final eliminations before scoring, TIEBREAK rooms are
+    waiting on revealed final draws, and FINISHED rooms have a winner but may
+    still be reused for another round.
     """
     WAITING = "waiting"
     PLAYING = "playing"
     GRACE_PERIOD = "grace_period"
+    TIEBREAK = "tiebreak"
     FINISHED = "finished"
 
 class Card(BaseModel):
@@ -265,6 +254,9 @@ class GameState(BaseModel):
     final_round_turns: Optional[int] = None
     turn_started_at: Optional[datetime] = None
     turn_ready_at: Optional[datetime] = None  # short transition lock before the next player may act
+    tiebreak_player_ids: List[str] = []
+    tiebreak_draws: Dict[str, Card] = {}
+    tiebreak_round: int = 0
 
 class Room(BaseModel):
     """
@@ -341,6 +333,7 @@ FACE_RANKS = {"Jack", "Queen", "King"}
 BOT_TURN_START_DELAY_RANGE = (2.0, 3.2)
 BOT_ACTION_DELAY_RANGE = (1.4, 2.4)
 BOT_END_TURN_DELAY_RANGE = (1.2, 2.0)
+TIEBREAK_REVEAL_DELAY_SECONDS = 2.0
 BOT_ONLY_ROOM_TIMEOUT_SECONDS = 5 * 60
 WAITING_EMPTY_ROOM_TIMEOUT_SECONDS = 15 * 60
 WAITING_ACTIVE_ROOM_TIMEOUT_SECONDS = 45 * 60
@@ -675,7 +668,14 @@ class GameRoomManager:
             room.game_state.current_turn = room.players[next_index].player_id
             room.game_state.turn_started_at = utc_now()
 
-        if room.status in (GameStatus.PLAYING, GameStatus.GRACE_PERIOD) and len(room.players) == 1:
+        if room.status == GameStatus.TIEBREAK:
+            remaining_ids = {p.player_id for p in room.players}
+            room.game_state.tiebreak_player_ids = [
+                pid for pid in room.game_state.tiebreak_player_ids if pid in remaining_ids
+            ]
+            room.game_state.tiebreak_draws.pop(player_id, None)
+
+        if room.status in (GameStatus.PLAYING, GameStatus.GRACE_PERIOD, GameStatus.TIEBREAK) and len(room.players) == 1:
             self.end_game(resolved_room_id, room.players[0].player_id)
 
         room.last_activity = datetime.now()
@@ -845,8 +845,8 @@ class GameRoomManager:
         Broadcasts a warning to connected players before closing.
         Thresholds:
           - Bot-only rooms:                          5 minutes inactivity
-          - PLAYING rooms with no connected humans:  10 minutes inactivity
-          - PLAYING rooms with connected humans:     20 minutes inactivity (any move resets timer)
+          - PLAYING/TIEBREAK with no connected humans: 10 minutes inactivity
+          - PLAYING/TIEBREAK with connected humans:    20 minutes inactivity (any move resets timer)
           - WAITING rooms with no connected humans:  15 minutes
           - WAITING rooms with connected humans:     45 minutes
           - FINISHED rooms:                          10 minutes
@@ -865,9 +865,9 @@ class GameRoomManager:
                 to_delete.append((room_id, "bot_only"))
             elif room.status == GameStatus.FINISHED and age > FINISHED_ROOM_TIMEOUT_SECONDS:
                 to_delete.append((room_id, "game_finished"))
-            elif room.status == GameStatus.PLAYING and connected_humans == 0 and age > PLAYING_ABANDONED_ROOM_TIMEOUT_SECONDS:
+            elif room.status in (GameStatus.PLAYING, GameStatus.TIEBREAK) and connected_humans == 0 and age > PLAYING_ABANDONED_ROOM_TIMEOUT_SECONDS:
                 to_delete.append((room_id, "abandoned_game"))
-            elif room.status == GameStatus.PLAYING and age > PLAYING_ACTIVE_ROOM_TIMEOUT_SECONDS:
+            elif room.status in (GameStatus.PLAYING, GameStatus.TIEBREAK) and age > PLAYING_ACTIVE_ROOM_TIMEOUT_SECONDS:
                 to_delete.append((room_id, "inactivity"))
             elif room.status == GameStatus.WAITING and connected_humans == 0 and age > WAITING_EMPTY_ROOM_TIMEOUT_SECONDS:
                 to_delete.append((room_id, "empty_lobby"))
@@ -990,10 +990,11 @@ class GameRoomManager:
 
     def tally_scores(self, room_id: str) -> Optional[str]:
         """
-        Score all remaining cards, pick the winner, and finish the room.
+        Score all remaining cards and apply the non-random tie-breakers.
 
         Ties are resolved by lower score, then fewer remaining cards, then
-        whether the player called Cambio.
+        whether the player called Cambio. If multiple players are still tied,
+        the room enters the interactive draw-off instead of using list order.
         """
         resolved_room_id = self._resolve_room_id(room_id)
         room = self.rooms.get(resolved_room_id)
@@ -1012,20 +1013,189 @@ class GameRoomManager:
             player.score = score
             player_stats.append((player, score, count))
 
-        # Determine winner using pre-calculated values
-        # Tie-break priority: 1. Lower score, 2. Fewer cards, 3. Is Cambio caller
-        sorted_stats = sorted(
-            player_stats,
-            key=lambda x: (x[1], x[2], 0 if x[0].player_id == room.game_state.cambio_caller else 1)
-        )
+        if not player_stats:
+            return None
 
-        winner = sorted_stats[0][0] if sorted_stats else None
-        winner_id = winner.player_id if winner else None
+        lowest_score = min(stat[1] for stat in player_stats)
+        finalists = [stat for stat in player_stats if stat[1] == lowest_score]
+
+        fewest_cards = min(stat[2] for stat in finalists)
+        finalists = [stat for stat in finalists if stat[2] == fewest_cards]
+
+        caller_id = room.game_state.cambio_caller
+        caller = next((stat[0] for stat in finalists if stat[0].player_id == caller_id), None)
+        if caller:
+            self.end_game(resolved_room_id, caller.player_id)
+            return caller.player_id
+
+        if len(finalists) == 1:
+            winner_id = finalists[0][0].player_id
+            self.end_game(resolved_room_id, winner_id)
+            return winner_id
+
+        room.status = GameStatus.TIEBREAK
+        room.game_state.game_phase = "tiebreak"
+        room.grace_period_end = None
+        room.game_state.tiebreak_player_ids = [stat[0].player_id for stat in finalists]
+        room.game_state.tiebreak_draws = {}
+        room.game_state.tiebreak_round = 1
+        return None
+
+    async def complete_scoring(self, room_id: str) -> Optional[str]:
+        """Finish normal scoring or announce an unresolved final draw-off."""
+        winner_id = self.tally_scores(room_id)
+        room = self.get_room(room_id)
+        if not room:
+            return None
 
         if winner_id:
-            self.end_game(resolved_room_id, winner_id)
+            await self.broadcast_game_ended(room_id, winner_id)
+            return winner_id
+
+        if room.status == GameStatus.TIEBREAK:
+            names = [
+                player.username
+                for player in room.players
+                if player.player_id in room.game_state.tiebreak_player_ids
+            ]
+            await self.broadcast_to_room(room_id, {
+                "type": "tiebreak_started",
+                "data": {
+                    "message": f"Final tie-break draw: {', '.join(names)} must each draw a revealed card.",
+                    "room": room.model_dump(mode="json"),
+                }
+            })
+            self.schedule_bot_tiebreak_draws(room_id)
+
+        return None
+
+    def _replenish_tiebreak_deck(self, room: Room) -> bool:
+        """Recycle discards or make a fresh draw-off deck when cards run out."""
+        if room.game_state.deck:
+            return True
+
+        if room.game_state.discard_pile:
+            room.game_state.deck = list(room.game_state.discard_pile)
+            room.game_state.discard_pile = []
+        else:
+            # A very long round can consume every drawable card. The draw-off
+            # must still be able to repeat until it produces one winner.
+            room.game_state.deck = self.create_deck(room.num_decks)
+        secure_random.shuffle(room.game_state.deck)
+        return bool(room.game_state.deck)
+
+    async def draw_tiebreak_card(self, room_id: str, player_id: str) -> Optional[str]:
+        """Reveal one player's draw-off card and resolve or advance the round."""
+        resolved_room_id = self._resolve_room_id(room_id)
+        room = self.rooms.get(resolved_room_id)
+        if not room or room.status != GameStatus.TIEBREAK:
+            raise ValueError("No tie-break draw is active")
+
+        eligible_ids = room.game_state.tiebreak_player_ids
+        if player_id not in eligible_ids:
+            raise ValueError("You are not part of this tie-break draw")
+        if player_id in room.game_state.tiebreak_draws:
+            raise ValueError("You already drew for this tie-break round")
+        if not self._replenish_tiebreak_deck(room):
+            raise ValueError("No cards remain for the tie-break draw")
+
+        player = next((p for p in room.players if p.player_id == player_id), None)
+        if not player:
+            raise ValueError("Player not found")
+
+        card = room.game_state.deck.pop()
+        value = get_card_value(card, room.num_decks)
+        room.game_state.tiebreak_draws[player_id] = card
+        room.last_activity = datetime.now()
+
+        # Preserve this reveal as it appeared before a completed tied round is
+        # cleared for the next draw. There is intentionally no await before the
+        # round state is resolved, preventing simultaneous clicks from resolving
+        # the same round twice.
+        reveal_room = room.model_dump(mode="json")
+        reveal_message = f"{player.username} drew {card} (value {value}) for the tie-break."
+        outcome = "waiting"
+        winner_id = None
+        tied_names = []
+
+        if all(pid in room.game_state.tiebreak_draws for pid in eligible_ids):
+            values = {
+                pid: get_card_value(room.game_state.tiebreak_draws[pid], room.num_decks)
+                for pid in eligible_ids
+            }
+            lowest_value = min(values.values())
+            lowest_ids = [pid for pid in eligible_ids if values[pid] == lowest_value]
+
+            if len(lowest_ids) == 1:
+                winner_id = lowest_ids[0]
+                self.end_game(resolved_room_id, winner_id)
+                outcome = "winner"
+            else:
+                room.game_state.discard_pile.extend(room.game_state.tiebreak_draws.values())
+                room.game_state.tiebreak_player_ids = lowest_ids
+                room.game_state.tiebreak_draws = {}
+                room.game_state.tiebreak_round += 1
+                tied_names = [
+                    p.username for p in room.players if p.player_id in lowest_ids
+                ]
+                outcome = "repeat"
+
+        await self.broadcast_to_room(resolved_room_id, {
+            "type": "tiebreak_card_drawn",
+            "data": {
+                "player_id": player_id,
+                "card": card.model_dump(mode="json"),
+                "value": value,
+                "message": reveal_message,
+                "room": reveal_room,
+            }
+        })
+
+        if outcome in {"winner", "repeat"}:
+            await asyncio.sleep(TIEBREAK_REVEAL_DELAY_SECONDS)
+
+        if outcome == "winner":
+            await self.broadcast_game_ended(resolved_room_id, winner_id)
+        elif outcome == "repeat":
+            await self.broadcast_to_room(resolved_room_id, {
+                "type": "tiebreak_round_tied",
+                "data": {
+                    "message": f"{', '.join(tied_names)} tied for the lowest draw. Draw again!",
+                    "room": room.model_dump(mode="json"),
+                }
+            })
+            self.schedule_bot_tiebreak_draws(resolved_room_id)
 
         return winner_id
+
+    def schedule_bot_tiebreak_draws(self, room_id: str):
+        """Let any bot still in a draw-off reveal its own card after a pause."""
+        room = self.get_room(room_id)
+        if not room or room.status != GameStatus.TIEBREAK:
+            return
+
+        pending_bot_ids = [
+            player.player_id
+            for player in room.players
+            if player.is_bot
+            and player.player_id in room.game_state.tiebreak_player_ids
+            and player.player_id not in room.game_state.tiebreak_draws
+        ]
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        for bot_id in pending_bot_ids:
+            loop.create_task(self._bot_tiebreak_draw(room_id, bot_id))
+
+    async def _bot_tiebreak_draw(self, room_id: str, bot_id: str):
+        await self._bot_sleep(BOT_ACTION_DELAY_RANGE)
+        room = self.get_room(room_id)
+        if (not room or room.status != GameStatus.TIEBREAK
+                or bot_id not in room.game_state.tiebreak_player_ids
+                or bot_id in room.game_state.tiebreak_draws):
+            return
+        await self.draw_tiebreak_card(room_id, bot_id)
 
     def next_turn(self, room_id: str) -> Optional[str]:
         """
@@ -1346,6 +1516,7 @@ class GameRoomManager:
             "data": {
                 "winner_id": winner_id,
                 "winner_username": winner_username,
+                "tiebreak_round": room.game_state.tiebreak_round,
                 "room": room.model_dump(mode="json")
             }
         })
@@ -2758,16 +2929,13 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
                     await websocket.send_json({"type": "error", "message": "Not in grace period"})
                     continue
 
-                winner_id = room_manager.tally_scores(room_id)
-                room = room_manager.get_room(room_id)
-                await room_manager.broadcast_to_room(room_id, {
-                    "type": "game_ended",
-                    "data": {
-                        "winner_id": winner_id,
-                        "winner_username": next((p.username for p in room.players if p.player_id == winner_id), "Unknown"),
-                        "room": room.model_dump(mode='json')
-                    }
-                })
+                await room_manager.complete_scoring(room_id)
+
+            elif msg_type == "tiebreak_draw":
+                try:
+                    await room_manager.draw_tiebreak_card(room_id, player_id)
+                except ValueError as exc:
+                    await websocket.send_json({"type": "error", "message": str(exc)})
 
             elif msg_type == "play_again":
                 # Reset game state to waiting

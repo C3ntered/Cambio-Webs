@@ -128,6 +128,112 @@ def test_deck_draw_swap_description_preserves_hidden_card_privacy():
     assert "9 of Spades" not in message
 
 
+def test_tally_scores_prefers_lowest_score_then_fewer_cards():
+    manager = GameRoomManager()
+    room = manager.create_room("Player1", max_players=3, num_decks=1)
+    manager.join_room(room.room_id, "Player2")
+    player1, player2 = room.players
+
+    player1.hand = [Card(suit="Clubs", rank="2"), None]
+    player2.hand = [Card(suit="Clubs", rank="Ace"), Card(suit="Spades", rank="Ace")]
+
+    winner_id = manager.tally_scores(room.room_id)
+
+    assert player1.score == player2.score == 2
+    assert winner_id == player1.player_id
+    assert room.status == GameStatus.FINISHED
+
+
+def test_tally_scores_prefers_the_lowest_total_before_other_tiebreakers():
+    manager = GameRoomManager()
+    room = manager.create_room("Player1", max_players=3, num_decks=1)
+    manager.join_room(room.room_id, "Player2")
+    player1, player2 = room.players
+    player1.hand = [Card(suit="Clubs", rank="2")]
+    player2.hand = [Card(suit="Spades", rank="3")]
+    room.game_state.cambio_caller = player2.player_id
+
+    winner_id = manager.tally_scores(room.room_id)
+
+    assert winner_id == player1.player_id
+
+
+def test_tally_scores_prefers_cambio_caller_after_score_and_card_count():
+    manager = GameRoomManager()
+    room = manager.create_room("Player1", max_players=3, num_decks=1)
+    manager.join_room(room.room_id, "Player2")
+    player1, player2 = room.players
+    player1.hand = [Card(suit="Clubs", rank="4")]
+    player2.hand = [Card(suit="Spades", rank="4")]
+    room.game_state.cambio_caller = player2.player_id
+
+    winner_id = manager.tally_scores(room.room_id)
+
+    assert winner_id == player2.player_id
+    assert room.status == GameStatus.FINISHED
+
+
+def test_unresolved_score_tie_starts_revealed_draw_off():
+    manager = GameRoomManager()
+    room = manager.create_room("Player1", max_players=3, num_decks=1)
+    manager.join_room(room.room_id, "Player2")
+    manager.join_room(room.room_id, "Caller")
+    player1, player2, caller = room.players
+    player1.hand = [Card(suit="Clubs", rank="3")]
+    player2.hand = [Card(suit="Spades", rank="3")]
+    caller.hand = [Card(suit="Hearts", rank="10")]
+    room.game_state.cambio_caller = caller.player_id
+
+    winner_id = manager.tally_scores(room.room_id)
+
+    assert winner_id is None
+    assert room.status == GameStatus.TIEBREAK
+    assert room.game_state.tiebreak_player_ids == [player1.player_id, player2.player_id]
+    assert room.game_state.tiebreak_draws == {}
+    assert room.game_state.tiebreak_round == 1
+
+
+def test_equal_tiebreak_draws_repeat_until_one_lowest_card_wins(monkeypatch):
+    monkeypatch.setattr("Backend.backend.TIEBREAK_REVEAL_DELAY_SECONDS", 0)
+    manager = GameRoomManager()
+    room = manager.create_room("Player1", max_players=3, num_decks=1)
+    manager.join_room(room.room_id, "Player2")
+    manager.join_room(room.room_id, "Caller")
+    player1, player2, caller = room.players
+    player1.hand = [Card(suit="Clubs", rank="3")]
+    player2.hand = [Card(suit="Spades", rank="3")]
+    caller.hand = [Card(suit="Hearts", rank="10")]
+    room.game_state.cambio_caller = caller.player_id
+    assert manager.tally_scores(room.room_id) is None
+
+    # Cards are popped from the end: equal Aces in round one, then a red King
+    # beats a Joker in round two using the normal -2 and 0 scoring values.
+    room.game_state.deck = [
+        Card(suit="Joker", rank="Joker"),
+        Card(suit="Hearts", rank="King"),
+        Card(suit="Diamonds", rank="Ace"),
+        Card(suit="Clubs", rank="Ace"),
+    ]
+
+    async def play_draw_off():
+        assert await manager.draw_tiebreak_card(room.room_id, player1.player_id) is None
+        assert await manager.draw_tiebreak_card(room.room_id, player2.player_id) is None
+        assert room.status == GameStatus.TIEBREAK
+        assert room.game_state.tiebreak_round == 2
+        assert room.game_state.tiebreak_draws == {}
+
+        assert await manager.draw_tiebreak_card(room.room_id, player1.player_id) is None
+        return await manager.draw_tiebreak_card(room.room_id, player2.player_id)
+
+    winner_id = asyncio.run(play_draw_off())
+
+    assert winner_id == player1.player_id
+    assert room.status == GameStatus.FINISHED
+    assert room.last_winner_id == player1.player_id
+    assert room.game_state.tiebreak_draws[player1.player_id].rank == "King"
+    assert room.game_state.tiebreak_draws[player2.player_id].rank == "Joker"
+
+
 def test_can_update_settings_between_rounds():
     manager = GameRoomManager()
     room = manager.create_room(username="Player1", num_decks=1, initial_hand_size=4)

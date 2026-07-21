@@ -19,8 +19,9 @@ Last updated: 2026-06-30
 
 Rooms are created through `POST /api/rooms` or the browser lobby. A room starts
 in `waiting`, moves to `playing` after the host starts the game, enters
-`grace_period` after the final round following a Cambio call, and ends as
-`finished` after scores are tallied.
+`grace_period` after the final round following a Cambio call, optionally enters
+`tiebreak` for unresolved revealed draws, and ends as `finished` after a winner
+is determined.
 
 Rooms are stored in memory. Cleanup runs once per minute:
 
@@ -52,7 +53,10 @@ Scoring is handled by `get_card_value` in `Backend/backend.py`:
 - Joker: 0
 
 Lowest score wins. Ties are resolved by fewer remaining cards, then by whether
-the tied player called Cambio.
+the tied player called Cambio. If multiple players remain tied, each tied player
+reveals a draw from the deck. Only players tied for the lowest drawn value
+continue to another revealed draw, repeating until one winner remains. Normal
+card values apply to every draw, including Jokers and red Kings.
 
 ## Card Abilities
 
@@ -111,6 +115,8 @@ A player may call Cambio at the start of their turn before drawing. After that:
 2. Every other player gets one final turn.
 3. The room enters a short grace period for last eliminations.
 4. Scores are tallied and the lowest score wins.
+5. Equal scores use fewer remaining cards, then Cambio-caller priority.
+6. Any unresolved tie enters an interactive revealed-card draw-off.
 
 ## Practice Bot
 

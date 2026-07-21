@@ -19,6 +19,7 @@ const GAME_STATUS = {
     WAITING: 'waiting',
     PLAYING: 'playing',
     GRACE_PERIOD: 'grace_period',
+    TIEBREAK: 'tiebreak',
     FINISHED: 'finished'
 };
 
@@ -304,6 +305,19 @@ function handleSocketMessage(event) {
             renderBoard(message.data.room, message.data.your_player_id || playerContext.playerId);
             startGracePeriodCountdown(10);
             break;
+        case 'tiebreak_started':
+        case 'tiebreak_round_tied':
+            notify(message.data.message, 5000);
+            recordAction(message.data.message, 'alert');
+            latestRoomState = message.data.room;
+            renderBoard(message.data.room, playerContext.playerId);
+            break;
+        case 'tiebreak_card_drawn':
+            notify(message.data.message, 5000);
+            recordAction(message.data.message, 'draw');
+            latestRoomState = message.data.room;
+            renderBoard(message.data.room, playerContext.playerId);
+            break;
         case 'game_ended':
             // Clear grace period countdown if still running
             if (gracePeriodTimer !== null) {
@@ -330,6 +344,13 @@ function handleSocketMessage(event) {
                     winnerStrong.textContent = winnerName;
                     winnerPara.appendChild(winnerStrong);
                     resultsDiv.appendChild(winnerPara);
+
+                    if (message.data.tiebreak_round) {
+                        const tieBreakPara = document.createElement('p');
+                        tieBreakPara.className = 'tiebreak-winner-note';
+                        tieBreakPara.textContent = `Winner decided by revealed tie-break draw (round ${message.data.tiebreak_round}).`;
+                        resultsDiv.appendChild(tieBreakPara);
+                    }
 
                     const table = document.createElement('table');
                     table.className = 'score-table';
@@ -1031,6 +1052,81 @@ function getOpponentSeatClass(totalOpponents, opponentIndex) {
     return layout ? layout[opponentIndex] || null : null;
 }
 
+function getTiebreakCardValue(card, numDecks = 1) {
+    if (!card) return null;
+    if (card.rank === 'Joker') return 0;
+    if (card.rank === 'Ace') return 1;
+    if (/^(?:[2-9]|10)$/.test(String(card.rank))) return Number(card.rank);
+    if (card.rank === 'King' && ['Hearts', 'Diamonds'].includes(card.suit)) {
+        return Number(numDecks) === 2 ? -1 : -2;
+    }
+    return 10;
+}
+
+function renderTiebreakPanel(room, yourPlayerId) {
+    const panel = document.getElementById('tiebreak-panel');
+    const results = document.getElementById('tiebreak-results');
+    const status = document.getElementById('tiebreak-status');
+    const drawButton = document.getElementById('tiebreak-draw-btn');
+    if (!panel || !results || !status || !drawButton) return;
+
+    const isTiebreak = room?.status?.toLowerCase() === GAME_STATUS.TIEBREAK;
+    panel.style.display = isTiebreak ? 'block' : 'none';
+    if (!isTiebreak) return;
+
+    const participantIds = room.game_state?.tiebreak_player_ids || [];
+    const draws = room.game_state?.tiebreak_draws || {};
+    const round = room.game_state?.tiebreak_round || 1;
+    const drawnCount = participantIds.filter(pid => draws[pid]).length;
+    status.textContent = `Round ${round}: ${drawnCount}/${participantIds.length} cards revealed. Lowest value wins; equal lowest values draw again.`;
+    results.innerHTML = '';
+
+    participantIds.forEach(pid => {
+        const player = room.players.find(candidate => candidate.player_id === pid);
+        if (!player) return;
+
+        const playerResult = document.createElement('div');
+        playerResult.className = 'tiebreak-player-result';
+
+        const name = document.createElement('strong');
+        name.textContent = player.username + (pid === yourPlayerId ? ' (You)' : '');
+        playerResult.appendChild(name);
+
+        const card = draws[pid];
+        const cardElement = document.createElement('div');
+        cardElement.className = 'game-card pile-card tiebreak-card';
+        if (card) {
+            renderCardContent(cardElement, card);
+            cardElement.title = formatCard(card);
+        } else {
+            cardElement.classList.add('card-back');
+            cardElement.textContent = '🂠';
+            cardElement.title = `${player.username} has not drawn yet`;
+        }
+        playerResult.appendChild(cardElement);
+
+        const value = document.createElement('span');
+        value.className = 'tiebreak-card-value';
+        value.textContent = card
+            ? `${formatCard(card)} · value ${getTiebreakCardValue(card, room.num_decks)}`
+            : 'Waiting to draw…';
+        playerResult.appendChild(value);
+        results.appendChild(playerResult);
+    });
+
+    const isParticipant = participantIds.includes(yourPlayerId);
+    const alreadyDrew = !!draws[yourPlayerId];
+    drawButton.style.display = isParticipant ? 'inline-block' : 'none';
+    drawButton.disabled = alreadyDrew;
+    drawButton.textContent = alreadyDrew
+        ? 'Card revealed — waiting for the other draw'
+        : 'Draw and Reveal My Card';
+}
+
+function drawTiebreakCard() {
+    sendMessage('tiebreak_draw');
+}
+
 /**
  * Render the full lobby/game board from the latest server room snapshot.
  *
@@ -1131,6 +1227,9 @@ function renderBoard(room, yourPlayerId) {
         const isViewingPhase = room.game_state?.viewing_phase;
         if (isWaiting) {
             turnIndicator.innerText = `Waiting for players to join... (${room.players.length}/${room.max_players})`;
+        } else if (room.status?.toLowerCase() === GAME_STATUS.TIEBREAK) {
+            turnIndicator.style.backgroundColor = '#7E22CE';
+            turnIndicator.innerText = `Final Tie-Break · Draw Round ${room.game_state?.tiebreak_round || 1}`;
         } else if (isViewingPhase) {
             turnIndicator.innerText = 'Memorize your bottom 2 cards! (5 seconds)';
             turnIndicator.style.backgroundColor = '#FF9800';
@@ -1175,12 +1274,24 @@ function renderBoard(room, yourPlayerId) {
     const myHandContainer = document.getElementById('my-hand');
     const opponentsHandsContainer = document.getElementById('opponents-hands');
     const actionButtons = document.querySelector('.action-buttons');
+    const isTiebreak = room.status?.toLowerCase() === GAME_STATUS.TIEBREAK;
     const isPlaying = room.status?.toLowerCase() === GAME_STATUS.PLAYING || room.status?.toLowerCase() === GAME_STATUS.GRACE_PERIOD;
     const isViewingPhase = room.game_state?.viewing_phase;
+    renderTiebreakPanel(room, yourPlayerId);
 
     // Hide countdown when not in viewing phase
     const countdownEl = document.getElementById('viewing-countdown');
     if (countdownEl && !isViewingPhase) countdownEl.style.display = 'none';
+
+    if (isTiebreak) {
+        if (discardPileContainer) discardPileContainer.style.display = 'none';
+        if (deckPileContainer) deckPileContainer.style.display = 'none';
+        if (cambioContainer) cambioContainer.style.display = 'none';
+        if (myHandContainer) myHandContainer.style.display = 'none';
+        if (opponentsHandsContainer) opponentsHandsContainer.style.display = 'none';
+        if (actionButtons) actionButtons.style.display = 'none';
+        return;
+    }
 
     if (isPlaying) {
         if (discardPileContainer) discardPileContainer.style.display = isViewingPhase ? 'none' : 'block';
@@ -1733,6 +1844,9 @@ function comparePlayersForStandings(room) {
         if (a.player_id === cambioCaller && b.player_id !== cambioCaller) return -1;
         if (b.player_id === cambioCaller && a.player_id !== cambioCaller) return 1;
 
+        if (a.player_id === room?.last_winner_id && b.player_id !== room?.last_winner_id) return -1;
+        if (b.player_id === room?.last_winner_id && a.player_id !== room?.last_winner_id) return 1;
+
         return String(a.username || '').localeCompare(String(b.username || ''));
     };
 }
@@ -2230,6 +2344,7 @@ window.handlePracticeBot = handlePracticeBot;
 window.handleJoinRoom = handleJoinRoom;
 window.drawCard = drawCard;
 window.drawFromDiscard = drawFromDiscard;
+window.drawTiebreakCard = drawTiebreakCard;
 window.playCard = playCard;
 // window.eliminateCard = eliminateCard; // Removed direct access
 window.resolveDraw = resolveDraw;
