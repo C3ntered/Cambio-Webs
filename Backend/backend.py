@@ -381,6 +381,25 @@ def get_card_ability(card: Card) -> Optional[str]:
         return "look_and_swap"
     return None
 
+
+def describe_draw_swap(
+    username: str,
+    hand_index: int,
+    drawn_card: Card,
+    discarded_card: Card,
+    draw_source: str,
+) -> str:
+    """Describe a draw swap without revealing a private deck draw."""
+    if draw_source == "discard":
+        incoming = f"{drawn_card} from the discard pile"
+    else:
+        incoming = "a hidden card drawn from the deck"
+
+    return (
+        f"{username} swapped {incoming} with card #{hand_index + 1} "
+        f"in their hand ({discarded_card})."
+    )
+
 # ============================================================================
 # Game Room Manager
 # ============================================================================
@@ -1573,7 +1592,13 @@ class GameRoomManager:
             await self.broadcast_to_room(room_id, {
                 "type": "cards_swapped",
                 "data": {
-                    "message": f"{bot.username} swapped from the discard pile.",
+                    "message": describe_draw_swap(
+                        bot.username,
+                        swap_index,
+                        drawn_card,
+                        discarded_card,
+                        "discard",
+                    ),
                     "player1_id": bot.player_id,
                     "card1_index": swap_index,
                     "draw_source": "discard",
@@ -1623,7 +1648,13 @@ class GameRoomManager:
             await self.broadcast_to_room(room_id, {
                 "type": "cards_swapped",
                 "data": {
-                    "message": f"{bot.username} swapped a drawn card into their hand.",
+                    "message": describe_draw_swap(
+                        bot.username,
+                        swap_index,
+                        drawn_card,
+                        discarded_card,
+                        "deck",
+                    ),
                     "player1_id": bot.player_id,
                     "card1_index": swap_index,
                     "draw_source": "deck",
@@ -2263,7 +2294,13 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
                     await room_manager.broadcast_to_room(room_id, {
                         "type": "cards_swapped",
                         "data": {
-                            "message": f"{player.username} swapped the drawn card into card slot #{hand_index + 1}.",
+                            "message": describe_draw_swap(
+                                player.username,
+                                hand_index,
+                                drawn_card,
+                                discarded_card,
+                                player.last_draw_source,
+                            ),
                             "player1_id": player.player_id,
                             "card1_index": hand_index,
                             "draw_source": player.last_draw_source,

@@ -1,7 +1,16 @@
 import pytest
 import asyncio
 from datetime import datetime, timedelta, timezone
-from Backend.backend import Card, GameRoomManager, Room, Player, GameStatus, GameState, get_card_value
+from Backend.backend import (
+    Card,
+    GameRoomManager,
+    Room,
+    Player,
+    GameStatus,
+    GameState,
+    describe_draw_swap,
+    get_card_value,
+)
 
 def test_deck_auto_adjustment_below_threshold():
     manager = GameRoomManager()
@@ -86,6 +95,37 @@ def test_red_king_value_depends_on_deck_count():
 
     assert get_card_value(red_king, num_decks=1) == -2
     assert get_card_value(red_king, num_decks=2) == -1
+
+
+def test_discard_draw_swap_description_names_both_cards_and_hand_number():
+    message = describe_draw_swap(
+        "Cambio Bot",
+        2,
+        Card(suit="Diamonds", rank="Jack"),
+        Card(suit="Clubs", rank="4"),
+        "discard",
+    )
+
+    assert message == (
+        "Cambio Bot swapped Jack of Diamonds from the discard pile with "
+        "card #3 in their hand (4 of Clubs)."
+    )
+
+
+def test_deck_draw_swap_description_preserves_hidden_card_privacy():
+    message = describe_draw_swap(
+        "Kai",
+        0,
+        Card(suit="Spades", rank="9"),
+        Card(suit="Hearts", rank="Queen"),
+        "deck",
+    )
+
+    assert message == (
+        "Kai swapped a hidden card drawn from the deck with card #1 in their "
+        "hand (Queen of Hearts)."
+    )
+    assert "9 of Spades" not in message
 
 
 def test_can_update_settings_between_rounds():

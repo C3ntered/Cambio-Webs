@@ -1425,8 +1425,9 @@
             font-weight: 800;
         }
 
-        @media (min-width: 769px) and (max-width: 1400px),
-        (min-width: 769px) and (max-height: 920px) {
+        /* Keep one compact board scale across desktop widths. Expanding the
+           browser to fullscreen should reveal more table, not enlarge cards. */
+        @media (min-width: 769px) {
             :root {
                 --player-card-width: 92px;
                 --player-card-height: 130px;
