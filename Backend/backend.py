@@ -18,7 +18,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Resp
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Tuple
 from datetime import datetime, timedelta, timezone
 import uuid
 import secrets
@@ -329,6 +329,15 @@ FACE_RANKS = {"Jack", "Queen", "King"}
 BOT_TURN_START_DELAY_RANGE = (2.0, 3.2)
 BOT_ACTION_DELAY_RANGE = (1.4, 2.4)
 BOT_END_TURN_DELAY_RANGE = (1.2, 2.0)
+# A blind/look-and-swap only trades away the bot's own worst card when it's
+# at least this bad - otherwise giving up a decent card for an unknown one
+# is a bad trade in expectation.
+BOT_SWAP_AWAY_VALUE_THRESHOLD = 7
+# Cambio is called for certain below the low threshold, and as a coin flip
+# in the soft range below it - mirrors a cautious-but-not-perfect player.
+BOT_CAMBIO_CALL_SCORE_THRESHOLD = 5
+BOT_CAMBIO_CALL_SCORE_SOFT_THRESHOLD = 9
+BOT_CAMBIO_CALL_SOFT_CHANCE = 0.35
 TIEBREAK_REVEAL_DELAY_SECONDS = 2.0
 BOT_ONLY_ROOM_TIMEOUT_SECONDS = 5 * 60
 WAITING_EMPTY_ROOM_TIMEOUT_SECONDS = 15 * 60
@@ -411,6 +420,14 @@ class GameRoomManager:
         self.bot_turn_tasks: Dict[str, asyncio.Task] = {}
         # (room_id, player_id) -> pending removal task, cancelled on reconnect
         self.disconnect_grace_tasks: Dict[tuple[str, str], asyncio.Task] = {}
+        # (room_id, bot_id) -> {(target_player_id, card_index): last-seen Card}
+        # A bot's best-effort memory of cards it has peeked at or looked at via
+        # abilities. Entries are only ever consulted alongside a fresh check
+        # that the slot is still occupied, so a stale entry for a card that
+        # was since swapped by someone else just makes the bot's guess wrong
+        # for that slot rather than causing an invalid move - the same kind
+        # of imperfect recall a human player has.
+        self.bot_opponent_memory: Dict[Tuple[str, str], Dict[Tuple[str, int], Card]] = {}
 
     def _normalize_room_id(self, room_id: str) -> str:
         """Return a canonical uppercase room code, or an empty string."""
@@ -628,6 +645,7 @@ class GameRoomManager:
         room.players = [p for p in room.players if p.player_id != player_id]
         self.remove_connection(resolved_room_id, player_id)
         self.cancel_disconnect_grace(resolved_room_id, player_id)
+        self._forget_bot_memory_of_player(resolved_room_id, player_id)
 
         # Anyone who owed *this* player an elimination replacement can never
         # fulfill that obligation now that they've left.
@@ -639,6 +657,7 @@ class GameRoomManager:
         if not room.players:
             self.rooms.pop(resolved_room_id, None)
             self.room_connections.pop(resolved_room_id, None)
+            self._clear_bot_memory_for_room(resolved_room_id)
             return None, player, True
 
         if room.last_winner_id == player_id:
@@ -771,7 +790,8 @@ class GameRoomManager:
         
         room.status = GameStatus.PLAYING
         room.game_state.game_phase = "dealing"
-        
+        self._clear_bot_memory_for_room(resolved_room_id)
+
         # Auto-adjust number of decks based on actual player count if needed.
         # If the deal uses more than two-thirds of one 54-card deck, use two decks.
         total_drawn = len(room.players) * room.initial_hand_size
@@ -1518,6 +1538,92 @@ class GameRoomManager:
 
         return False
 
+    async def resolve_pending_swap_decision(self, room_id: str, player: Player, do_swap: bool) -> None:
+        """
+        Execute (or skip) the swap queued by a ``look_and_swap`` ability.
+
+        Shared by the human ``resolve_swap_decision`` message handler and the
+        bot's own decision after using the same ability, so both paths stay
+        in sync. Always clears the pending swap-decision state on return.
+        """
+        room = self.get_room(room_id)
+        targets = player.pending_swap_targets
+        if room and targets and do_swap:
+            p1 = next((p for p in room.players if p.player_id == targets["first_player_id"]), None)
+            p2 = next((p for p in room.players if p.player_id == targets["second_player_id"]), None)
+
+            if p1 and p2:
+                idx1 = targets["first_card_index"]
+                idx2 = targets["second_card_index"]
+                if (0 <= idx1 < len(p1.hand) and p1.hand[idx1] is not None and
+                        0 <= idx2 < len(p2.hand) and p2.hand[idx2] is not None):
+
+                    p1.hand[idx1], p2.hand[idx2] = p2.hand[idx2], p1.hand[idx1]
+                    room = self.get_room(room_id)
+                    await self.broadcast_to_room(room_id, {
+                        "type": "cards_swapped",
+                        "data": {
+                            "message": f"{player.username} swapped {p1.username}'s card #{idx1 + 1} with {p2.username}'s card #{idx2 + 1}.",
+                            "player1_id": p1.player_id,
+                            "card1_index": idx1,
+                            "player2_id": p2.player_id,
+                            "card2_index": idx2,
+                            "room": room.model_dump(mode='json')
+                        }
+                    })
+        elif room and targets:
+            room = self.get_room(room_id)
+            await self.broadcast_to_room(room_id, {
+                "type": "decision_notification",
+                "data": {
+                    "message": f"{player.username} chose not to swap.",
+                    "room": room.model_dump(mode="json")
+                }
+            })
+
+        player.pending_ability = None
+        player.pending_swap_targets = None
+
+    async def perform_cambio_call(self, room_id: str, player_id: str) -> bool:
+        """
+        Call Cambio on a player's behalf: freeze their hand, announce it, and
+        end their turn. Shared by the human ``call_cambio`` message handler
+        and the bot's own turn logic so both paths stay in sync.
+        """
+        room = self.get_room(room_id)
+        if not room:
+            return False
+        player = next((p for p in room.players if p.player_id == player_id), None)
+        if not player or room.game_state.current_turn != player_id:
+            return False
+        if player.pending_drawn_card or player.pending_ability:
+            return False
+        if room.game_state.cambio_called:
+            return False
+
+        room.game_state.cambio_called = True
+        room.game_state.cambio_caller = player_id
+
+        # The caller's hand is now frozen - anyone who still owed them
+        # an elimination replacement can no longer deliver it.
+        await self.release_replacement_debts_to(
+            room_id, player_id,
+            f"{player.username} called Cambio and is now immune. That replacement obligation was cancelled."
+        )
+
+        room = self.get_room(room_id)
+        await self.broadcast_to_room(room_id, {
+            "type": "cambio_called",
+            "data": {
+                "player_id": player_id,
+                "message": f"{player.username} called Cambio!",
+                "room": room.model_dump(mode='json')
+            }
+        })
+
+        await self.end_turn(room_id)
+        return True
+
     async def apply_penalty_draw(self, room_id: str, player: "Player", websocket) -> bool:
         """
         Draw a penalty card for a wrong sacrifice/elimination guess.
@@ -1642,6 +1748,30 @@ class GameRoomManager:
         """Return indices for cards that have not been eliminated."""
         return [i for i, card in enumerate(player.hand) if card is not None]
 
+    def _bot_memory(self, room_id: str, bot_id: str) -> Dict[Tuple[str, int], Card]:
+        """Return (creating if needed) a bot's card-knowledge map for a room."""
+        return self.bot_opponent_memory.setdefault((room_id, bot_id), {})
+
+    def _bot_remember_card(self, room_id: str, bot_id: str, target_player_id: str, card_index: int, card: Card) -> None:
+        self._bot_memory(room_id, bot_id)[(target_player_id, card_index)] = card
+
+    def _bot_forget_card(self, room_id: str, bot_id: str, target_player_id: str, card_index: int) -> None:
+        self._bot_memory(room_id, bot_id).pop((target_player_id, card_index), None)
+
+    def _clear_bot_memory_for_room(self, room_id: str) -> None:
+        """Wipe every bot's card knowledge for a room (a fresh deal invalidates it all)."""
+        for key in [k for k in self.bot_opponent_memory if k[0] == room_id]:
+            self.bot_opponent_memory.pop(key, None)
+
+    def _forget_bot_memory_of_player(self, room_id: str, departed_player_id: str) -> None:
+        """Drop any bot's memorized knowledge of a player who just left the room."""
+        self.bot_opponent_memory.pop((room_id, departed_player_id), None)
+        for (rid, _bot_id), memory in self.bot_opponent_memory.items():
+            if rid != room_id:
+                continue
+            for key in [k for k in memory if k[0] == departed_player_id]:
+                memory.pop(key, None)
+
     async def _bot_sleep(self, delay_range: tuple[float, float]):
         """
         Add human-paced pauses between bot actions so players can react.
@@ -1698,6 +1828,179 @@ class GameRoomManager:
         if drawn_value == worst_value:
             return secure_random.random() < 0.15
         return False
+
+    def _bot_should_call_cambio(self, room: Room, bot: Player) -> bool:
+        """
+        Decide whether the bot should call Cambio at the start of its turn.
+
+        Uses the bot's real hand total (the bot already "cheats" by reading
+        its own hand directly, same as the rest of the bot heuristics) - a
+        near-certain call below a low threshold, a coin flip in a soft range
+        above it, mirroring a cautious-but-imperfect player.
+        """
+        if room.game_state.cambio_called:
+            return False
+        indices = self._non_empty_card_indices(bot)
+        if not indices:
+            return False
+        hand_value = sum(get_card_value(bot.hand[i], room.num_decks) for i in indices)
+        if hand_value <= BOT_CAMBIO_CALL_SCORE_THRESHOLD:
+            return True
+        if hand_value <= BOT_CAMBIO_CALL_SCORE_SOFT_THRESHOLD:
+            return secure_random.random() < BOT_CAMBIO_CALL_SOFT_CHANCE
+        return False
+
+    def _bot_pick_peek_target(self, room: Room, bot: Player) -> Optional[Tuple[Player, int]]:
+        """
+        Choose a card to look at with peek_other, favoring slots the bot
+        hasn't already memorized so the ability yields new information.
+        """
+        memory = self._bot_memory(room.room_id, bot.player_id)
+        unknown: List[Tuple[Player, int]] = []
+        known: List[Tuple[Player, int]] = []
+        for p in room.players:
+            if p.player_id == bot.player_id:
+                continue
+            for idx in self._non_empty_card_indices(p):
+                target = (p, idx)
+                if (p.player_id, idx) in memory:
+                    known.append(target)
+                else:
+                    unknown.append(target)
+        pool = unknown or known
+        if not pool:
+            return None
+        return secure_random.choice(pool)
+
+    def _bot_plan_swap(self, room: Room, bot: Player) -> Optional[Tuple[Tuple[str, int], Tuple[str, int]]]:
+        """
+        Plan a blind_swap/look_and_swap trade: always offer the bot's own
+        worst card, and prefer a target slot the bot already knows is worse
+        than that card. With no such lead, only trade blindly when the
+        bot's worst card is bad enough that a random opponent card is
+        likely an upgrade in expectation.
+
+        Returns ((source_player_id, source_index), (target_player_id, target_index)).
+        """
+        own_idx = self._bot_worst_card_index(room, bot)
+        if own_idx is None:
+            return None
+        own_value = get_card_value(bot.hand[own_idx], room.num_decks)
+
+        candidates: List[Tuple[str, int]] = []
+        for p in room.players:
+            if p.player_id == bot.player_id or p.player_id == room.game_state.cambio_caller:
+                continue
+            for idx in self._non_empty_card_indices(p):
+                candidates.append((p.player_id, idx))
+        if not candidates:
+            return None
+
+        memory = self._bot_memory(room.room_id, bot.player_id)
+        known = [c for c in candidates if c in memory]
+        if known:
+            best_known = min(known, key=lambda c: get_card_value(memory[c], room.num_decks))
+            if get_card_value(memory[best_known], room.num_decks) < own_value:
+                return (bot.player_id, own_idx), best_known
+
+        if own_value >= BOT_SWAP_AWAY_VALUE_THRESHOLD:
+            return (bot.player_id, own_idx), secure_random.choice(candidates)
+
+        return None
+
+    def _bot_wants_swap(self, room: Room, own_card: Optional[Card], other_card: Optional[Card]) -> bool:
+        """Only take a look_and_swap trade the bot has actually confirmed is an upgrade."""
+        if own_card is None or other_card is None:
+            return False
+        return get_card_value(other_card, room.num_decks) < get_card_value(own_card, room.num_decks)
+
+    async def _bot_use_pending_ability(self, room_id: str, bot: Player) -> None:
+        """
+        Use a bot's pending discard ability instead of letting it go to
+        waste, mirroring how a human player would react to the same
+        ``ability_opportunity``. Always clears ``pending_ability`` before
+        returning (directly, or via ``resolve_pending_swap_decision`` for
+        the look_and_swap decision phase).
+        """
+        ability = bot.pending_ability
+        if not ability:
+            return
+
+        await self._bot_sleep(BOT_ACTION_DELAY_RANGE)
+        room = self.get_room(room_id)
+        if not room or bot.pending_ability != ability:
+            return
+
+        if ability == "peek_self":
+            indices = self._non_empty_card_indices(bot)
+            if indices:
+                await self.resolve_card_ability(room, bot, ability, {"card_index": secure_random.choice(indices)})
+            bot.pending_ability = None
+            return
+
+        if ability == "peek_other":
+            target = self._bot_pick_peek_target(room, bot)
+            if target:
+                target_player, index = target
+                peeked_card = target_player.hand[index]
+                await self.resolve_card_ability(room, bot, ability, {
+                    "target_player_id": target_player.player_id,
+                    "card_index": index
+                })
+                if peeked_card:
+                    self._bot_remember_card(room_id, bot.player_id, target_player.player_id, index, peeked_card)
+            bot.pending_ability = None
+            return
+
+        if ability == "blind_swap":
+            plan = self._bot_plan_swap(room, bot)
+            if plan:
+                (src_pid, src_idx), (tgt_pid, tgt_idx) = plan
+                await self.resolve_card_ability(room, bot, ability, {
+                    "source_player_id": src_pid,
+                    "source_card_index": src_idx,
+                    "target_player_id": tgt_pid,
+                    "target_card_index": tgt_idx
+                })
+                self._bot_forget_card(room_id, bot.player_id, tgt_pid, tgt_idx)
+            bot.pending_ability = None
+            return
+
+        if ability == "look_and_swap":
+            plan = self._bot_plan_swap(room, bot)
+            if not plan:
+                bot.pending_ability = None
+                return
+            (first_pid, first_idx), (second_pid, second_idx) = plan
+            first_player = next((p for p in room.players if p.player_id == first_pid), None)
+            second_player = next((p for p in room.players if p.player_id == second_pid), None)
+            if not first_player or not second_player:
+                bot.pending_ability = None
+                return
+            first_card = first_player.hand[first_idx]
+            second_card = second_player.hand[second_idx]
+
+            resolved = await self.resolve_card_ability(room, bot, ability, {
+                "first_target": {"player_id": first_pid, "card_index": first_idx},
+                "second_target": {"player_id": second_pid, "card_index": second_idx}
+            })
+            if not resolved:
+                bot.pending_ability = None
+                return
+
+            if first_card:
+                self._bot_remember_card(room_id, bot.player_id, first_pid, first_idx, first_card)
+            if second_card:
+                self._bot_remember_card(room_id, bot.player_id, second_pid, second_idx, second_card)
+
+            await self._bot_sleep(BOT_ACTION_DELAY_RANGE)
+            do_swap = self._bot_wants_swap(room, first_card, second_card)
+            await self.resolve_pending_swap_decision(room_id, bot, do_swap)
+            if do_swap:
+                self._bot_forget_card(room_id, bot.player_id, second_pid, second_idx)
+            return
+
+        bot.pending_ability = None
 
     async def _bot_eliminate_own_matching_card(self, room_id: str, bot: Player) -> bool:
         """
@@ -1798,8 +2101,10 @@ class GameRoomManager:
 
     async def run_bot_turn(self, room_id: str, bot_player_id: str):
         """
-        A basic practice bot: take useful visible cards, keep lower-value draws,
-        sacrifice matching cards, and pause between actions so humans can react.
+        A practice bot: call Cambio when its hand is good enough, take useful
+        visible cards, keep lower-value draws, use the abilities it earns
+        instead of wasting them, sacrifice matching cards, and pause between
+        actions so humans can react.
         """
         await self._bot_sleep(BOT_TURN_START_DELAY_RANGE)
         room = self.get_room(room_id)
@@ -1817,6 +2122,10 @@ class GameRoomManager:
 
         bot = next((p for p in room.players if p.player_id == bot_player_id and p.is_bot), None)
         if not bot:
+            return
+
+        if self._bot_should_call_cambio(room, bot):
+            await self.perform_cambio_call(room_id, bot_player_id)
             return
 
         await self._bot_eliminate_own_matching_card(room_id, bot)
@@ -1943,6 +2252,11 @@ class GameRoomManager:
                     "room": room.model_dump(mode="json")
                 }
             })
+
+            ability_name = get_card_ability(drawn_card)
+            if ability_name:
+                bot.pending_ability = ability_name
+                await self._bot_use_pending_ability(room_id, bot)
 
         bot.pending_ability = None
         bot.pending_swap_targets = None
@@ -2639,47 +2953,9 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
                 if player.pending_ability != "swap_decision" or not player.pending_swap_targets:
                     await websocket.send_json({"type": "error", "message": "No pending swap decision"})
                     continue
-                
-                do_swap = message.get("data", {}).get("swap", False)
-                targets = player.pending_swap_targets
-                
-                if do_swap:
-                    # Execute swap
-                    p1 = next((p for p in room.players if p.player_id == targets["first_player_id"]), None)
-                    p2 = next((p for p in room.players if p.player_id == targets["second_player_id"]), None)
-                    
-                    if p1 and p2:
-                        idx1 = targets["first_card_index"]
-                        idx2 = targets["second_card_index"]
-                        if (0 <= idx1 < len(p1.hand) and p1.hand[idx1] is not None and 
-                            0 <= idx2 < len(p2.hand) and p2.hand[idx2] is not None):
-                            
-                            p1.hand[idx1], p2.hand[idx2] = p2.hand[idx2], p1.hand[idx1]
-                            room = room_manager.get_room(room_id)
-                            await room_manager.broadcast_to_room(room_id, {
-                                "type": "cards_swapped",
-                                "data": {
-                                    "message": f"{player.username} swapped {p1.username}'s card #{idx1 + 1} with {p2.username}'s card #{idx2 + 1}.",
-                                    "player1_id": p1.player_id,
-                                    "card1_index": idx1,
-                                    "player2_id": p2.player_id,
-                                    "card2_index": idx2,
-                                    "room": room.model_dump(mode='json')
-                                }
-                            })
-                
-                else:
-                    room = room_manager.get_room(room_id)
-                    await room_manager.broadcast_to_room(room_id, {
-                        "type": "decision_notification",
-                        "data": {
-                            "message": f"{player.username} chose not to swap.",
-                            "room": room.model_dump(mode="json")
-                        }
-                    })
 
-                player.pending_ability = None
-                player.pending_swap_targets = None
+                do_swap = message.get("data", {}).get("swap", False)
+                await room_manager.resolve_pending_swap_decision(room_id, player, do_swap)
                 await room_manager.end_turn(room_id)
             
             elif msg_type == "skip_ability":
@@ -2831,29 +3107,8 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
                         "message": "Cambio has already been called"
                     })
                     continue
-                
-                room.game_state.cambio_called = True
-                room.game_state.cambio_caller = player_id
-                # final_round_turns will be initialized in next_turn()
 
-                # The caller's hand is now frozen - anyone who still owed them
-                # an elimination replacement can no longer deliver it.
-                await room_manager.release_replacement_debts_to(
-                    room_id, player_id,
-                    f"{player.username} called Cambio and is now immune. That replacement obligation was cancelled."
-                )
-
-                await room_manager.broadcast_to_room(room_id, {
-                    "type": "cambio_called",
-                    "data": {
-                        "player_id": player_id,
-                        "message": f"{player.username} called Cambio!",
-                        "room": room.model_dump(mode='json')
-                    }
-                })
-
-                # End the turn immediately
-                await room_manager.end_turn(room_id)
+                await room_manager.perform_cambio_call(room_id, player_id)
 
             elif msg_type == "eliminate_card":
                 if room.status != GameStatus.PLAYING and room.status != GameStatus.GRACE_PERIOD:

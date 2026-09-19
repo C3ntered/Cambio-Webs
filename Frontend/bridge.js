@@ -987,7 +987,7 @@ function showCambioAnnouncement(message) {
     banner.classList.remove('show');
     void banner.offsetWidth;
     banner.classList.add('show');
-    setTimeout(() => banner.classList.remove('show'), 3200);
+    setTimeout(() => banner.classList.remove('show'), 2200);
 }
 
 /**
