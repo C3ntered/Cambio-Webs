@@ -419,7 +419,7 @@ def test_empty_hand_does_not_end_round_before_cambio():
     empty_hand_player.hand = [None] * len(empty_hand_player.hand)
     room.game_state.current_turn = empty_hand_player.player_id
 
-    asyncio.run(manager.end_turn(room.room_id, check_win=True))
+    asyncio.run(manager.end_turn(room.room_id))
 
     assert room.status == GameStatus.PLAYING
     assert room.game_state.game_phase == "playing"
@@ -454,9 +454,109 @@ def test_disconnect_removes_player_and_advances_current_turn():
     room.game_state.game_phase = "playing"
     room.game_state.current_turn = player2_id
 
-    updated_room, removed_player, deleted_room = manager.disconnect_player_from_room(room.room_id, player2_id)
+    updated_room, removed_player, deleted_room = asyncio.run(
+        manager.remove_player_from_game(room.room_id, player2_id)
+    )
 
     assert deleted_room is False
     assert removed_player.player_id == player2_id
     assert all(player.player_id != player2_id for player in updated_room.players)
     assert updated_room.game_state.current_turn == updated_room.players[0].player_id
+
+
+def test_disconnect_of_last_seated_player_wraps_turn_instead_of_replaying_previous_player():
+    # Regression test: the old formula clamped via min(index, len-1), which
+    # replayed the previous player's turn (and skipped the first player)
+    # whenever the departing player was last in room.players. It must wrap
+    # around to the first player instead.
+    manager = GameRoomManager()
+    room = manager.create_room(username="Player1")
+    manager.join_room(room.room_id, "Player2")
+    _, player3_id = manager.join_room(room.room_id, "Player3")
+    manager.start_game(room.room_id)
+    room.game_state.viewing_phase = False
+    room.game_state.game_phase = "playing"
+    room.game_state.current_turn = player3_id  # last player in the list
+
+    updated_room, _, deleted_room = asyncio.run(
+        manager.remove_player_from_game(room.room_id, player3_id)
+    )
+
+    assert deleted_room is False
+    assert updated_room.game_state.current_turn == updated_room.players[0].player_id
+
+
+def test_room_collapsing_to_one_player_broadcasts_game_ended():
+    manager = GameRoomManager()
+    room = manager.create_room(username="Player1")
+    _, player2_id = manager.join_room(room.room_id, "Player2")
+    manager.start_game(room.room_id)
+    room.status = GameStatus.PLAYING
+    room.game_state.game_phase = "playing"
+
+    sent = []
+
+    class FakeSocket:
+        async def send_json(self, data):
+            sent.append(data)
+
+    manager.room_connections[room.room_id] = {room.players[0].player_id: FakeSocket()}
+
+    updated_room, _, deleted_room = asyncio.run(
+        manager.remove_player_from_game(room.room_id, player2_id)
+    )
+
+    assert deleted_room is False
+    assert updated_room.status == GameStatus.FINISHED
+    assert any(msg.get("type") == "game_ended" for msg in sent)
+
+
+def test_turn_timer_pauses_while_current_player_owes_a_replacement():
+    manager = GameRoomManager()
+    room = manager.create_room(username="Player1", play_with_bot=True, turn_timer_enabled=True)
+    room.status = GameStatus.PLAYING
+    room.game_state.game_phase = "playing"
+    current = room.players[0]
+    room.game_state.current_turn = current.player_id
+    room.game_state.turn_started_at = datetime.now(timezone.utc) - timedelta(seconds=61)
+    current.pending_replacement_target = {"target_player_id": room.players[1].player_id, "card_index": 0}
+
+    assert manager.should_auto_advance_turn(room, datetime.now(timezone.utc)) is False
+
+    current.pending_replacement_target = None
+    assert manager.should_auto_advance_turn(room, datetime.now(timezone.utc)) is True
+
+
+def test_leaving_player_releases_replacement_debts_owed_to_them():
+    manager = GameRoomManager()
+    room = manager.create_room(username="Player1")
+    _, player2_id = manager.join_room(room.room_id, "Player2")
+    manager.start_game(room.room_id)
+    room.status = GameStatus.PLAYING
+    room.game_state.game_phase = "playing"
+    giver = room.players[0]
+    giver.pending_replacement_target = {"target_player_id": player2_id, "card_index": 0}
+
+    asyncio.run(manager.remove_player_from_game(room.room_id, player2_id))
+
+    assert giver.pending_replacement_target is None
+
+
+def test_reconnect_within_grace_period_cancels_pending_removal():
+    async def scenario():
+        manager = GameRoomManager()
+        room = manager.create_room(username="Player1")
+        _, player2_id = manager.join_room(room.room_id, "Player2")
+
+        manager.mark_player_disconnected(room.room_id, player2_id)
+        assert next(p for p in room.players if p.player_id == player2_id).is_connected is False
+
+        manager.schedule_disconnect_grace(room.room_id, player2_id)
+        assert (room.room_id, player2_id) in manager.disconnect_grace_tasks
+
+        manager.cancel_disconnect_grace(room.room_id, player2_id)
+        assert (room.room_id, player2_id) not in manager.disconnect_grace_tasks
+        # The player row must still be present - a reconnect re-attaches to it.
+        assert any(p.player_id == player2_id for p in room.players)
+
+    asyncio.run(scenario())
