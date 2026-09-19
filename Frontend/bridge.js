@@ -74,6 +74,49 @@ let playerContext = {
     roomId: null,
     playerId: null,
 };
+// Set right before a deliberate socket.close() (leaving, or the server
+// telling us the room is gone) so the close handler knows not to try to
+// reconnect. Any other close - network drop, refresh, heartbeat timeout -
+// is treated as accidental and worth retrying.
+let intentionalDisconnect = false;
+let reconnectAttempts = 0;
+let reconnectTimer = null;
+const RECONNECT_DELAYS_MS = [1000, 2000, 4000, 8000, 15000];
+const SESSION_STORAGE_KEY = 'cambio_session';
+
+/**
+ * Remember enough to reconnect to this room after a refresh or dropped
+ * connection. sessionStorage (not localStorage) is deliberate: it survives
+ * a reload of this tab but not a fresh tab/browser restart, so a long-gone
+ * session never tries to silently rejoin a stale room later.
+ */
+function saveSession() {
+    try {
+        sessionStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify({
+            username: playerContext.username,
+            roomId: playerContext.roomId,
+            playerId: playerContext.playerId,
+        }));
+    } catch (e) {
+        // Storage unavailable (private browsing, etc.) - reconnect-on-refresh
+        // just won't be available; live reconnect after a network blip still works.
+    }
+}
+
+function clearSession() {
+    try {
+        sessionStorage.removeItem(SESSION_STORAGE_KEY);
+    } catch (e) { /* ignore */ }
+}
+
+function loadSession() {
+    try {
+        const raw = sessionStorage.getItem(SESSION_STORAGE_KEY);
+        return raw ? JSON.parse(raw) : null;
+    } catch (e) {
+        return null;
+    }
+}
 let latestRoomState = null;
 let pendingDrawnCard = null;  // Card drawn, awaiting swap or discard
 let pendingAbility = null;    // Ability available to use
@@ -81,7 +124,6 @@ let selectingTargets = false; // Mode for selecting targets
 let selectedTargets = [];     // Targets selected so far
 let pendingSwapDecision = false; // Mode for deciding whether to swap
 let eliminationTarget = null; // Target for elimination (waiting for replacement card selection)
-// let adminMode = false; // ADMIN MODE - Disabled for production
 let isAnimating = false;
 let activeLookIndicators = {}; // State of cards being looked at
 const actionHistory = [];
@@ -143,7 +185,6 @@ async function joinGame(username, roomId = null, options = {}) {
     } else {
         const handSize = document.getElementById('hand-size-select')?.value || 4;
         const numDecks = document.getElementById('num-decks-select')?.value || 1;
-        const redKingVariant = document.getElementById('red-king-variant')?.checked || false;
         const turnTimerEnabled = document.getElementById('turn-timer-enabled')?.checked || false;
 
         payload = {
@@ -151,7 +192,6 @@ async function joinGame(username, roomId = null, options = {}) {
             max_players: 8, // Increased max players default
             initial_hand_size: parseInt(handSize),
             num_decks: parseInt(numDecks),
-            red_king_variant: redKingVariant,
             play_with_bot: !!options.playWithBot,
             turn_timer_enabled: turnTimerEnabled
         };
@@ -195,6 +235,7 @@ async function joinGame(username, roomId = null, options = {}) {
         roomId: joinedRoomId,
         playerId: playerId
     };
+    saveSession();
 
     setupWebSocket(joinedRoomId, playerId);
     renderBoard(room, playerId);
@@ -204,9 +245,15 @@ async function joinGame(username, roomId = null, options = {}) {
  * Connect to the room WebSocket and identify the current player.
  */
 function setupWebSocket(roomId, playerId) {
+    if (reconnectTimer) {
+        clearTimeout(reconnectTimer);
+        reconnectTimer = null;
+    }
     if (socket) {
+        intentionalDisconnect = true; // replacing the socket, not losing it
         socket.close();
     }
+    intentionalDisconnect = false;
 
     // Use WebSocket protocol matching the API_BASE protocol
     const wsProtocol = API_BASE.startsWith('https') ? 'wss:' : 'ws:';
@@ -214,6 +261,7 @@ function setupWebSocket(roomId, playerId) {
     socket = new WebSocket(`${wsProtocol}//${wsHost}/ws/${roomId}`);
 
     socket.addEventListener('open', () => {
+        reconnectAttempts = 0;
         const joinMsg = {
             type: 'join',
             data: { player_id: playerId }
@@ -222,8 +270,33 @@ function setupWebSocket(roomId, playerId) {
     });
 
     socket.addEventListener('message', handleSocketMessage);
-    socket.addEventListener('close', () => updateStatus('Disconnected'));
+    socket.addEventListener('close', () => {
+        if (intentionalDisconnect) {
+            // A deliberate leave/replace already set its own status message
+            // (e.g. resetToLobby's "Left room") - don't stomp on it.
+            return;
+        }
+        scheduleReconnect(roomId, playerId);
+    });
     socket.addEventListener('error', () => updateStatus('Connection error'));
+}
+
+/**
+ * Retry a dropped connection with backoff. The server holds the player's
+ * seat open for a grace period (see DISCONNECT_GRACE_PERIOD_SECONDS
+ * backend-side), so reconnecting just re-sends the same join message - the
+ * backend re-attaches it to the existing player row.
+ */
+function scheduleReconnect(roomId, playerId) {
+    if (reconnectTimer) return;
+    const delay = RECONNECT_DELAYS_MS[Math.min(reconnectAttempts, RECONNECT_DELAYS_MS.length - 1)];
+    reconnectAttempts += 1;
+    updateStatus(`Connection lost. Reconnecting in ${Math.round(delay / 1000)}s...`);
+    reconnectTimer = setTimeout(() => {
+        reconnectTimer = null;
+        updateStatus('Reconnecting...');
+        setupWebSocket(roomId, playerId);
+    }, delay);
 }
 
 /**
@@ -592,9 +665,6 @@ function handleSocketMessage(event) {
                     return;
                 }
 
-                console.log('Revealing card:', formatCard(cardData), 'for player', pid, 'index', idx);
-                console.log('Button found:', btn, 'innerHTML:', btn.innerHTML, 'classes:', btn.className);
-
                 // Store original state
                 const originalHTML = btn.innerHTML;
                 const originalClasses = btn.className;
@@ -690,6 +760,22 @@ function handleSocketMessage(event) {
                 renderBoard(latestRoomState, playerContext.playerId);
             }
             break;
+        case 'player_disconnected':
+            // The player keeps their seat for a grace period server-side -
+            // this is not the same as player_left, just a status change.
+            notify(message.data.message || (message.data.username ? `${message.data.username} disconnected` : 'A player disconnected'));
+            if (message.data.room) {
+                latestRoomState = message.data.room;
+                renderBoard(message.data.room, playerContext.playerId);
+            }
+            break;
+        case 'player_reconnected':
+            notify(message.data.message || (message.data.username ? `${message.data.username} reconnected` : 'A player reconnected'));
+            if (message.data.room) {
+                latestRoomState = message.data.room;
+                renderBoard(message.data.room, playerContext.playerId);
+            }
+            break;
         case 'room_settings_updated':
             notify(message.data.message || 'Room settings updated');
             latestRoomState = message.data.room;
@@ -699,11 +785,59 @@ function handleSocketMessage(event) {
             notify(message.data.message || 'You left the room');
             resetToLobby();
             break;
+        case 'server_closing':
+            notify(message.data.message || 'This room was closed by the server.', 6000);
+            resetToLobby();
+            break;
         case 'error':
-            // Auto-recover from state mismatch if backend says "No pending drawn card"
-            if (message.message === "No pending drawn card") {
-                pendingDrawnCard = null;
-                renderBoard(latestRoomState, playerContext.playerId); // Refresh UI to hide panel
+            if (message.message === 'Room not found' || message.message === 'Player not in room') {
+                // The room is gone, or our reconnect grace period already
+                // expired server-side - this session can't recover, so stop
+                // here instead of looping reconnect attempts against a dead
+                // room forever.
+                notify(
+                    message.message === 'Room not found'
+                        ? 'That room no longer exists.'
+                        : 'Your seat in that room is gone - it may have timed out while you were away.',
+                    6000
+                );
+                resetToLobby();
+                break;
+            }
+            // Any rejected action can leave the player mid-way through a
+            // multi-step interaction (selecting ability targets, choosing a
+            // replacement card, resolving a drawn card) with no way back
+            // except a page reload - previously only one exact message
+            // string ("No pending drawn card") recovered from this. Instead,
+            // two-way sync every client-side "what am I doing right now"
+            // flag against the last known server state on every error: some
+            // actions optimistically clear client state before the server
+            // confirms it, so a rejection must be able to restore an ability
+            // panel that's still genuinely active server-side, not just tear
+            // down UI that's already gone.
+            if (latestRoomState) {
+                const me = getCurrentPlayerState(latestRoomState);
+                pendingDrawnCard = me?.pending_drawn_card || null;
+
+                if (me?.pending_ability) {
+                    pendingAbility = me.pending_ability;
+                    pendingSwapDecision = me.pending_ability === 'swap_decision';
+                    if (!pendingSwapDecision) {
+                        selectingTargets = true;
+                        selectedTargets = [];
+                    }
+                } else {
+                    pendingAbility = null;
+                    selectingTargets = false;
+                    selectedTargets = [];
+                    pendingSwapDecision = false;
+                }
+
+                eliminationTarget = me?.pending_replacement_target
+                    ? { pid: me.pending_replacement_target.target_player_id, idx: me.pending_replacement_target.card_index, replacement: true }
+                    : null;
+
+                renderBoard(latestRoomState, playerContext.playerId);
             }
             notify(message.message || 'That move is not allowed.', 3500);
             break;
@@ -796,13 +930,10 @@ function resolveDraw(action, cardIndex) {
 /**
  * Attempt to eliminate/sacrifice one of the current player's cards.
  */
-function playCard(card, cardIndex, abilityPayload = null) {
+function playCard(card, cardIndex) {
     const payload = { card };
     if (cardIndex !== undefined && cardIndex !== null) {
         payload.card_index = cardIndex;
-    }
-    if (abilityPayload) {
-        payload.ability = abilityPayload;
     }
     sendMessage('play_card', payload);
 }
@@ -1016,6 +1147,17 @@ function handleCardClick(playerId, cardIndex, isOwnCard) {
                 renderBoard(latestRoomState, playerContext.playerId);
                 return;
             }
+
+            // Immunity Check: Cannot target a player who called Cambio
+            if (latestRoomState.game_state.cambio_caller) {
+                const caller = latestRoomState.game_state.cambio_caller;
+                if (selectedTargets[0].player_id === caller || selectedTargets[1].player_id === caller) {
+                    alert("One of the targets has called Cambio and is immune!");
+                    selectedTargets = [];
+                    return;
+                }
+            }
+
             // Just send the targets. The decision comes later.
             sendMessage('use_ability', {
                 first_target: selectedTargets[0],
@@ -1188,12 +1330,17 @@ function renderBoard(room, yourPlayerId) {
             item.style.backgroundColor = player.player_id === yourPlayerId ? '#e3f2fd' : '#f5f5f5';
             item.style.borderRadius = '4px';
             item.textContent = player.username + (player.player_id === yourPlayerId ? ' (You)' : '') + (player.is_bot ? ' (Bot)' : '');
+            const statusDot = document.createElement('span');
             if (player.is_connected) {
-                const statusDot = document.createElement('span');
                 statusDot.style.color = 'green';
                 statusDot.textContent = ' ●';
-                item.appendChild(statusDot);
+            } else {
+                // Still seated (not removed) - just dropped, and has a
+                // reconnect grace period server-side before losing the seat.
+                statusDot.style.color = '#e6a100';
+                statusDot.textContent = ' ● reconnecting…';
             }
+            item.appendChild(statusDot);
             list.appendChild(item);
         });
         playerListContainer.appendChild(list);
@@ -1537,7 +1684,6 @@ function renderBoard(room, yourPlayerId) {
                     } else {
                         // Bottom row = odd indices (1, 3, 5...) in column-flow layout
                         const isBottomCard = (index % 2) === 1;
-                        // const isVisible = (isViewingPhase && isBottomCard) || adminMode || (activeLookIndicators[yourPlayerId] && activeLookIndicators[yourPlayerId][index] === "PERSIST"); // ADMIN MODE - Disabled
                         const isVisible = (isViewingPhase && isBottomCard) || (activeLookIndicators[yourPlayerId] && activeLookIndicators[yourPlayerId][index] === "PERSIST");
 
                         // Clear old classes
@@ -1545,9 +1691,6 @@ function renderBoard(room, yourPlayerId) {
 
                         if (isVisible) {
                             renderCardContent(btn, card);
-                            // if (adminMode) { // ADMIN MODE - Disabled
-                            //     btn.style.backgroundColor = "#e3f2fd";
-                            // }
                         } else {
                             btn.innerHTML = ''; // Clear structure
                             btn.classList.add('card-back');
@@ -1555,7 +1698,7 @@ function renderBoard(room, yourPlayerId) {
                         }
                     }
 
-                    if (card && !isViewingPhase) {
+                    if (card && !isViewingPhase && !pendingSwapDecision) {
                         // Priority 1: Selecting targets (Abilities)
                         if (selectingTargets) {
                             btn.addEventListener('click', (e) => {
@@ -1583,6 +1726,10 @@ function renderBoard(room, yourPlayerId) {
                             btn.addEventListener('click', () => playCard(card, index));
                         }
                     } else {
+                        // A stray click here must not fall through to the
+                        // default play/eliminate handler while the player is
+                        // still looking at their "Swap or Keep" decision -
+                        // that used to fire a real elimination attempt.
                         btn.style.cursor = 'default';
                         btn.disabled = true;
                     }
@@ -1607,7 +1754,7 @@ function renderBoard(room, yourPlayerId) {
                 }
                 const nameEl = document.createElement('div');
                 nameEl.className = 'opponent-name';
-                nameEl.innerText = player.username + (player.is_connected ? ' ●' : '');
+                nameEl.innerText = player.username + (player.is_connected ? ' ●' : ' ● reconnecting…');
                 section.appendChild(nameEl);
                 const cardsDiv = document.createElement('div');
                 cardsDiv.className = 'opponent-cards';
@@ -1635,7 +1782,6 @@ function renderBoard(room, yourPlayerId) {
                         btn.style.cursor = "default";
                     } else {
                         const isRevealed = (activeLookIndicators[player.player_id] && activeLookIndicators[player.player_id][index] === "PERSIST");
-                        // if (adminMode || isRevealed) { // ADMIN MODE - Disabled
                         if (isRevealed) {
                             renderCardContent(btn, card);
                             btn.style.backgroundColor = "white";
@@ -1648,7 +1794,7 @@ function renderBoard(room, yourPlayerId) {
                     }
 
                     // Priority 1: Selecting targets (Abilities)
-                    if (card && selectingTargets) {
+                    if (card && selectingTargets && !pendingSwapDecision) {
                         btn.addEventListener('click', (e) => {
                             e.stopPropagation(); // Stop bubbling
                             handleCardClick(player.player_id, index, false);
@@ -1658,7 +1804,7 @@ function renderBoard(room, yourPlayerId) {
                         btn.innerText = "🎯";
                     }
                     // Priority 2: Elimination (Normal phase, if no draw pending)
-                    else if (!mustResolveDraw) {
+                    else if (!mustResolveDraw && !pendingSwapDecision) {
                         if (eliminationTarget && eliminationTarget.pid === player.player_id && eliminationTarget.idx === index) {
                             // Already selected as target
                             btn.style.borderColor = "#ff9800";
@@ -1666,6 +1812,9 @@ function renderBoard(room, yourPlayerId) {
                         }
                         btn.addEventListener('click', () => startElimination(player.player_id, index));
                     } else {
+                        // A stray click must not reach startElimination while
+                        // the player is still looking at their own "Swap or
+                        // Keep" decision panel.
                         btn.disabled = true;
                     }
                     cardsDiv.appendChild(btn);
@@ -2016,8 +2165,11 @@ function renderRoomSettings(room) {
             : 'Red Kings score -2 with one deck.';
     }
     if (leaveBtn) {
-        leaveBtn.disabled = !canEditSettings;
-        leaveBtn.title = canEditSettings ? 'Leave this room' : 'You can leave between rounds';
+        // Leaving is always allowed now - a deliberate leave is immediate
+        // and permanent, distinct from a dropped connection's reconnect
+        // grace period.
+        leaveBtn.disabled = false;
+        leaveBtn.title = canEditSettings ? 'Leave this room' : 'Leave this room for good (you will not be able to rejoin)';
     }
     if (addBotBtn) {
         const hasBot = room.players.some(p => p.is_bot);
@@ -2061,12 +2213,12 @@ function leaveRoom() {
     if (!latestRoomState) return;
 
     const status = latestRoomState.status?.toLowerCase();
-    if (status !== GAME_STATUS.WAITING && status !== GAME_STATUS.FINISHED) {
-        notify('You can leave between rounds.');
-        return;
-    }
+    const midGame = status !== GAME_STATUS.WAITING && status !== GAME_STATUS.FINISHED;
+    const confirmMessage = midGame
+        ? "Leave this room? You'll be removed from the active game for good - this can't be undone by reconnecting."
+        : 'Leave this room?';
 
-    if (confirm('Leave this room?')) {
+    if (confirm(confirmMessage)) {
         sendMessage('leave_room');
     }
 }
@@ -2076,6 +2228,13 @@ function leaveRoom() {
  */
 function resetToLobby() {
     clearTurnTimerDisplay();
+    intentionalDisconnect = true;
+    clearSession();
+    if (reconnectTimer) {
+        clearTimeout(reconnectTimer);
+        reconnectTimer = null;
+    }
+    reconnectAttempts = 0;
     if (socket) {
         socket.close();
         socket = null;
@@ -2131,17 +2290,6 @@ function updateStatus(status) {
         statusEl.innerText = status;
     }
 }
-
-// ADMIN MODE - Disabled for production
-// function toggleAdminMode() {
-//     const checkbox = document.getElementById('admin-mode-toggle');
-//     if (checkbox) {
-//         adminMode = checkbox.checked;
-//         if (latestRoomState) {
-//             renderBoard(latestRoomState, playerContext.playerId);
-//         }
-//     }
-// }
 
 /**
  * Copy the full join link for the current room to the clipboard.
@@ -2369,9 +2517,23 @@ window.skipAbility = skipAbility;
 window.updateRoomSettings = updateRoomSettings;
 window.leaveRoom = leaveRoom;
 window.addBotToRoom = addBotToRoom;
-// window.toggleAdminMode = toggleAdminMode; // ADMIN MODE - Disabled for production
 
 window.addEventListener('DOMContentLoaded', () => {
+    // A refresh (or a tab that was briefly backgrounded and dropped its
+    // connection) should rejoin the same seat automatically rather than
+    // dumping the player back at the lobby form.
+    const session = loadSession();
+    if (session && session.roomId && session.playerId && session.username) {
+        playerContext = {
+            username: session.username,
+            roomId: session.roomId,
+            playerId: session.playerId
+        };
+        updateStatus(`Reconnecting to room ${session.roomId}...`);
+        setupWebSocket(session.roomId, session.playerId);
+        return;
+    }
+
     const linkedRoomId = getRoomIdFromPath();
     if (!linkedRoomId) return;
 
@@ -2398,8 +2560,6 @@ function highlightCard(pid, idx, duration = 3000) {
  * Locate a rendered card button for animation and visual indicators.
  */
 function findCardElement(pid, idx, roomState, myPlayerId) {
-    console.log('findCardElement called:', pid, idx, myPlayerId);
-
     // Check if idx is undefined or null
     if (idx === undefined || idx === null) {
         console.warn('findCardElement: Invalid index', idx);

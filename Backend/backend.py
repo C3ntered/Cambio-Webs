@@ -17,7 +17,6 @@ Last updated: 2026-06-30
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
 from pydantic import BaseModel, ConfigDict
 from typing import List, Dict, Optional
 from datetime import datetime, timedelta, timezone
@@ -248,7 +247,6 @@ class GameState(BaseModel):
     game_phase: str = "waiting"  # waiting, dealing, playing, finished
     turn_number: int = 0
     viewing_phase: bool = False
-    revealed_cards: Dict[str, List[Card]] = {}  # player_id -> cards they've revealed
     cambio_called: bool = False
     cambio_caller: Optional[str] = None
     final_round_turns: Optional[int] = None
@@ -278,7 +276,6 @@ class Room(BaseModel):
     min_players: int = 2
     num_decks: int = 1  # Number of decks to use (auto-calculated if >5 players)
     initial_hand_size: int = 4  # Number of cards to deal per player
-    red_king_variant: bool = False # If True, Red Kings are -2
     last_winner_id: Optional[str] = None
     grace_period_end: Optional[datetime] = None
     turn_timer_enabled: bool = False
@@ -296,7 +293,6 @@ class CreateRoomRequest(BaseModel):
     max_players: int = 4
     num_decks: Optional[int] = None  # If None, auto-calculate based on player count (>5 = 2 decks)
     initial_hand_size: int = 4  # 4, 6, or 8
-    red_king_variant: bool = False
     play_with_bot: bool = False
     turn_timer_enabled: bool = False
 
@@ -342,6 +338,9 @@ PLAYING_ACTIVE_ROOM_TIMEOUT_SECONDS = 20 * 60
 FINISHED_ROOM_TIMEOUT_SECONDS = 10 * 60
 WEBSOCKET_HEARTBEAT_INTERVAL_SECONDS = 10
 WEBSOCKET_HEARTBEAT_TIMEOUT_SECONDS = 25
+# How long a dropped connection's seat is held open for reconnection before
+# the player is permanently removed from the room.
+DISCONNECT_GRACE_PERIOD_SECONDS = 90
 
 def get_card_value(card: Card, num_decks: int = 1) -> int:
     """
@@ -410,6 +409,8 @@ class GameRoomManager:
         self.rooms: Dict[str, Room] = {}
         self.room_connections: Dict[str, Dict[str, WebSocket]] = {}  # room_id -> {player_id -> websocket}
         self.bot_turn_tasks: Dict[str, asyncio.Task] = {}
+        # (room_id, player_id) -> pending removal task, cancelled on reconnect
+        self.disconnect_grace_tasks: Dict[tuple[str, str], asyncio.Task] = {}
 
     def _normalize_room_id(self, room_id: str) -> str:
         """Return a canonical uppercase room code, or an empty string."""
@@ -443,7 +444,6 @@ class GameRoomManager:
         max_players: int = 8,
         num_decks: Optional[int] = None,
         initial_hand_size: int = 4,
-        red_king_variant: bool = False,
         play_with_bot: bool = False,
         turn_timer_enabled: bool = False
     ) -> Room:
@@ -476,7 +476,6 @@ class GameRoomManager:
             max_players=max_players,
             num_decks=num_decks,
             initial_hand_size=initial_hand_size,
-            red_king_variant=red_king_variant,
             turn_timer_enabled=turn_timer_enabled
         )
         
@@ -598,9 +597,11 @@ class GameRoomManager:
         room.last_activity = datetime.now()
         return room
 
-    def remove_player_from_room(self, room_id: str, player_id: str) -> tuple[Optional[Room], Optional[Player], bool]:
+    async def remove_player_from_game(self, room_id: str, player_id: str) -> tuple[Optional[Room], Optional[Player], bool]:
         """
-        Remove a player from a lobby or finished room.
+        Permanently remove a player from a room, whether it's still a lobby or
+        mid-round (a deliberate "Leave Room" during an active game, or a
+        disconnect whose reconnect grace period expired).
 
         Returns ``(room, player, deleted_room)``. If the last player leaves, the
         room and socket registry are deleted immediately.
@@ -614,42 +615,26 @@ class GameRoomManager:
         if not player:
             return room, None, False
 
+        # Work out who should inherit the turn (if it was this player's turn)
+        # from the OLD, pre-removal ordering, mirroring next_turn()'s wraparound
+        # logic instead of clamping - clamping skips a player whenever the
+        # departing player was last in turn order.
+        next_current_id = None
+        if room.game_state.current_turn == player_id and len(room.players) > 1:
+            old_index = room.players.index(player)
+            next_index = (old_index + 1) % len(room.players)
+            next_current_id = room.players[next_index].player_id
+
         room.players = [p for p in room.players if p.player_id != player_id]
         self.remove_connection(resolved_room_id, player_id)
+        self.cancel_disconnect_grace(resolved_room_id, player_id)
 
-        if not room.players:
-            self.rooms.pop(resolved_room_id, None)
-            self.room_connections.pop(resolved_room_id, None)
-            return None, player, True
-
-        if room.game_state.current_turn == player_id:
-            room.game_state.current_turn = room.players[0].player_id if room.players else None
-        if room.last_winner_id == player_id:
-            room.last_winner_id = None
-
-        room.last_activity = datetime.now()
-        return room, player, False
-
-    def disconnect_player_from_room(self, room_id: str, player_id: str) -> tuple[Optional[Room], Optional[Player], bool]:
-        """
-        Remove a player after their WebSocket disconnects or misses heartbeats.
-
-        This is intentionally stronger than marking a player disconnected:
-        dropped players leave the room entirely so the remaining players can
-        keep playing without creating a new lobby.
-        """
-        resolved_room_id = self._resolve_room_id(room_id)
-        if not resolved_room_id or resolved_room_id not in self.rooms:
-            return None, None, False
-
-        room = self.rooms[resolved_room_id]
-        player = next((p for p in room.players if p.player_id == player_id), None)
-        if not player:
-            return room, None, False
-
-        player_index = room.players.index(player)
-        room.players = [p for p in room.players if p.player_id != player_id]
-        self.remove_connection(resolved_room_id, player_id)
+        # Anyone who owed *this* player an elimination replacement can never
+        # fulfill that obligation now that they've left.
+        await self.release_replacement_debts_to(
+            resolved_room_id, player_id,
+            f"{player.username} left before you could give them a replacement card. That obligation was cancelled."
+        )
 
         if not room.players:
             self.rooms.pop(resolved_room_id, None)
@@ -663,9 +648,8 @@ class GameRoomManager:
             room.game_state.cambio_called = False
             room.game_state.final_round_turns = None
 
-        if room.game_state.current_turn == player_id:
-            next_index = min(player_index, len(room.players) - 1)
-            room.game_state.current_turn = room.players[next_index].player_id
+        if next_current_id:
+            room.game_state.current_turn = next_current_id
             room.game_state.turn_started_at = utc_now()
 
         if room.status == GameStatus.TIEBREAK:
@@ -676,11 +660,100 @@ class GameRoomManager:
             room.game_state.tiebreak_draws.pop(player_id, None)
 
         if room.status in (GameStatus.PLAYING, GameStatus.GRACE_PERIOD, GameStatus.TIEBREAK) and len(room.players) == 1:
-            self.end_game(resolved_room_id, room.players[0].player_id)
+            winner_id = room.players[0].player_id
+            self.end_game(resolved_room_id, winner_id)
+            await self.broadcast_game_ended(resolved_room_id, winner_id)
 
         room.last_activity = datetime.now()
         return room, player, False
-    
+
+    def cancel_disconnect_grace(self, room_id: str, player_id: str):
+        """Cancel a pending disconnect-removal task, e.g. after a reconnect."""
+        resolved_room_id = self._resolve_room_id(room_id)
+        task = self.disconnect_grace_tasks.pop((resolved_room_id, player_id), None)
+        if task and not task.done():
+            task.cancel()
+
+    async def release_replacement_debts_to(self, room_id: str, target_player_id: str, reason_message: str):
+        """
+        Clear any pending_replacement_target that names ``target_player_id``,
+        for players who can no longer fulfill it (the target left, or became
+        Cambio-immune). Notifies each affected giver so their client can drop
+        any stuck "choose a replacement" UI.
+        """
+        resolved_room_id = self._resolve_room_id(room_id)
+        room = self.rooms.get(resolved_room_id)
+        if not room:
+            return
+        for other in room.players:
+            pending = other.pending_replacement_target
+            if pending and pending.get("target_player_id") == target_player_id:
+                other.pending_replacement_target = None
+                other_socket = self.room_connections.get(resolved_room_id, {}).get(other.player_id)
+                if other_socket:
+                    try:
+                        await other_socket.send_json({"type": "error", "message": reason_message})
+                    except Exception:
+                        pass
+
+    def mark_player_disconnected(self, room_id: str, player_id: str) -> Optional[Room]:
+        """
+        Record a dropped connection without removing the player's seat.
+
+        The player keeps their hand/turn/position for
+        ``DISCONNECT_GRACE_PERIOD_SECONDS`` so they can reconnect with the same
+        ``player_id`` (the WebSocket join handshake already re-attaches to an
+        existing player row). Call ``schedule_disconnect_grace`` alongside this
+        to actually remove them if they never come back.
+        """
+        resolved_room_id = self._resolve_room_id(room_id)
+        room = self.rooms.get(resolved_room_id)
+        if not room:
+            return None
+        player = next((p for p in room.players if p.player_id == player_id), None)
+        if not player:
+            return None
+        player.is_connected = False
+        self.remove_connection(resolved_room_id, player_id)
+        room.last_activity = datetime.now()
+        return room
+
+    def schedule_disconnect_grace(self, room_id: str, player_id: str):
+        """Remove a disconnected player for good if they don't reconnect in time."""
+        resolved_room_id = self._resolve_room_id(room_id)
+        self.cancel_disconnect_grace(resolved_room_id, player_id)
+        task = asyncio.create_task(self._expire_disconnect_grace(resolved_room_id, player_id))
+        self.disconnect_grace_tasks[(resolved_room_id, player_id)] = task
+
+    async def _expire_disconnect_grace(self, room_id: str, player_id: str):
+        try:
+            await asyncio.sleep(DISCONNECT_GRACE_PERIOD_SECONDS)
+        except asyncio.CancelledError:
+            return
+
+        self.disconnect_grace_tasks.pop((room_id, player_id), None)
+        room = self.rooms.get(room_id)
+        if not room:
+            return
+        player = next((p for p in room.players if p.player_id == player_id), None)
+        if not player or player.is_connected:
+            return  # already reconnected or already gone
+
+        removed_name = player.username
+        updated_room, removed_player, deleted_room = await self.remove_player_from_game(room_id, player_id)
+        if not deleted_room and updated_room:
+            if updated_room.status == GameStatus.PLAYING:
+                self.schedule_bot_turn(room_id)
+            await self.broadcast_to_room(room_id, {
+                "type": "player_left",
+                "data": {
+                    "player_id": player_id,
+                    "username": removed_name,
+                    "message": f"{removed_name}'s connection timed out and they were removed from the room.",
+                    "room": updated_room.model_dump(mode='json')
+                }
+            })
+
     def start_game(self, room_id: str):
         """
         Deal cards and move a waiting room into its viewing phase.
@@ -944,21 +1017,6 @@ class GameRoomManager:
                 await websocket.send_json(message)
             except Exception:
                 self.remove_connection(resolved_room_id, player_id)
-    
-    def check_win_condition(self, room_id: str) -> Optional[str]:
-        """
-        Return the first player whose remaining card slots are all eliminated.
-        """
-        resolved_room_id = self._resolve_room_id(room_id)
-        if not resolved_room_id or resolved_room_id not in self.rooms:
-            return None
-        
-        room = self.rooms[resolved_room_id]
-        for player in room.players:
-            # Check if all cards are None (eliminated)
-            if not any(card for card in player.hand):
-                return player.player_id
-        return None
     
     def end_game(self, room_id: str, winner_id: str):
         """
@@ -1488,6 +1546,42 @@ class GameRoomManager:
         player.hand.append(drawn_card)
         return True
 
+    async def discard_pending_drawn_card(self, room_id: str, player: "Player", websocket) -> bool:
+        """
+        Discard a player's still-undecided drawn card and offer its ability,
+        exactly like a deliberate ``resolve_draw`` discard would.
+
+        Used both by that normal path and by anything else that ends a
+        player's turn while a draw is still unresolved (e.g. a wrong-guess
+        elimination penalty) - the card, and its ability, must never be
+        silently dropped just because the turn is ending some other way.
+
+        Returns True if this opened an ability opportunity (the caller must
+        NOT end the turn yet); False if there was nothing pending or the
+        discarded card has no ability (the caller may end the turn normally).
+        """
+        room = self.rooms.get(room_id)
+        if not room or not player.pending_drawn_card:
+            return False
+
+        card = player.pending_drawn_card
+        room.game_state.discard_pile.append(card)
+        player.pending_drawn_card = None
+
+        ability_name = get_card_ability(card)
+        if not ability_name:
+            return False
+
+        player.pending_ability = ability_name
+        await websocket.send_json({
+            "type": "ability_opportunity",
+            "data": {
+                "ability": ability_name,
+                "message": f"Your unresolved drawn card ({card.rank}) was discarded. You may use its ability: {ability_name}",
+                "room": room.model_dump(mode='json')
+            }
+        })
+        return True
 
     async def broadcast_grace_period_started(self, room_id: str, message: str = "Grace Period started!"):
         """
@@ -1532,6 +1626,14 @@ class GameRoomManager:
         if room.game_state.viewing_phase or room.game_state.game_phase != "playing":
             return False
         if not room.game_state.current_turn or not room.game_state.turn_started_at:
+            return False
+        current_player = next(
+            (p for p in room.players if p.player_id == room.game_state.current_turn), None
+        )
+        if current_player and current_player.pending_replacement_target:
+            # The active player owes an elimination replacement. Let their
+            # turn pause for as long as it takes to choose which card to
+            # give instead of timing out and silently voiding the debt.
             return False
         elapsed = (as_utc(now) - as_utc(room.game_state.turn_started_at)).total_seconds()
         return elapsed >= room.turn_timer_seconds
@@ -1672,7 +1774,7 @@ class GameRoomManager:
                 "room": room.model_dump(mode="json")
             }
         })
-        await self.end_turn(room_id, check_win=True)
+        await self.end_turn(room_id)
 
     def schedule_bot_turn(self, room_id: str):
         """
@@ -1735,7 +1837,7 @@ class GameRoomManager:
 
         indices = self._non_empty_card_indices(bot)
         if not indices:
-            await self.end_turn(room_id, check_win=True)
+            await self.end_turn(room_id)
             return
 
         draw_from_discard = self._bot_should_take_discard(room, bot)
@@ -1745,7 +1847,7 @@ class GameRoomManager:
             swap_index = self._bot_worst_card_index(room, bot)
             if swap_index is None:
                 room.game_state.discard_pile.append(drawn_card)
-                await self.end_turn(room_id, check_win=True)
+                await self.end_turn(room_id)
                 return
             discarded_card = bot.hand[swap_index]
             bot.hand[swap_index] = drawn_card
@@ -1778,7 +1880,7 @@ class GameRoomManager:
             })
             await self._bot_eliminate_own_matching_card(room_id, bot)
             await self._bot_sleep(BOT_END_TURN_DELAY_RANGE)
-            await self.end_turn(room_id, check_win=True)
+            await self.end_turn(room_id)
             return
 
         if not room.game_state.deck:
@@ -1790,7 +1892,7 @@ class GameRoomManager:
                 }
             })
             await self._bot_sleep(BOT_END_TURN_DELAY_RANGE)
-            await self.end_turn(room_id, check_win=True)
+            await self.end_turn(room_id)
             return
 
         drawn_card = room.game_state.deck.pop()
@@ -1811,7 +1913,7 @@ class GameRoomManager:
                 bot.pending_ability = None
                 bot.pending_swap_targets = None
                 await self._bot_sleep(BOT_END_TURN_DELAY_RANGE)
-                await self.end_turn(room_id, check_win=True)
+                await self.end_turn(room_id)
                 return
             discarded_card = bot.hand[swap_index]
             bot.hand[swap_index] = drawn_card
@@ -1846,16 +1948,15 @@ class GameRoomManager:
         bot.pending_swap_targets = None
         await self._bot_eliminate_own_matching_card(room_id, bot)
         await self._bot_sleep(BOT_END_TURN_DELAY_RANGE)
-        await self.end_turn(room_id, check_win=True)
+        await self.end_turn(room_id)
 
 
-    async def end_turn(self, room_id: str, check_win: bool = False) -> Optional[str]:
+    async def end_turn(self, room_id: str) -> Optional[str]:
         """
         Advance to the next player, broadcast state, and schedule bots.
 
-        ``check_win`` is retained for compatibility with existing action
-        handlers, but an empty hand does not end a Cambio round. Scoring only
-        begins after Cambio is called and every other player finishes one turn.
+        An empty hand does not end a Cambio round - scoring only begins after
+        Cambio is called and every other player finishes one turn.
         """
         room = self.rooms.get(room_id)
         outgoing = None
@@ -1950,7 +2051,6 @@ async def create_room(request: CreateRoomRequest):
         request.max_players, 
         request.num_decks,
         request.initial_hand_size,
-        request.red_king_variant,
         request.play_with_bot,
         request.turn_timer_enabled
     )
@@ -2112,10 +2212,16 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
             await websocket.close()
             return
         
+        # A player row with is_connected already False (or a still-pending
+        # grace-removal task) means this socket is a reconnect, not a first
+        # join - cancel the pending removal so the seat is kept.
+        is_reconnect = not player.is_connected
+        room_manager.cancel_disconnect_grace(room_id, player_id)
+
         # Add connection
         room_manager.add_connection(room_id, player_id, websocket)
         player.is_connected = True
-        
+
         # Send current game state
         await websocket.send_json({
             "type": "game_state",
@@ -2124,14 +2230,15 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
                 "your_player_id": player_id
             }
         })
-        
+
         # Notify other players with updated room state
         room = room_manager.get_room(room_id)
         await room_manager.broadcast_to_room(room_id, {
-            "type": "player_joined",
+            "type": "player_reconnected" if is_reconnect else "player_joined",
             "data": {
                 "player_id": player_id,
                 "username": player.username,
+                "message": f"{player.username} reconnected." if is_reconnect else f"{player.username} joined the room.",
                 "room": room.model_dump(mode='json')
             }
         }, exclude_player=player_id)
@@ -2170,7 +2277,7 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
             if msg_type == "heartbeat_ack":
                 continue
 
-            if player.pending_replacement_target and msg_type not in {"give_replacement", "heartbeat_ack"}:
+            if player.pending_replacement_target and msg_type not in {"give_replacement", "heartbeat_ack", "leave_room"}:
                 await websocket.send_json({
                     "type": "error",
                     "message": "Give the eliminated player a replacement card before taking another action"
@@ -2478,7 +2585,7 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
                             "room": room.model_dump(mode='json')
                         }
                     })
-                    await room_manager.end_turn(room_id, check_win=True)
+                    await room_manager.end_turn(room_id)
 
                 elif action == "discard":
                     # You can only discard if you drew from the deck
@@ -2508,7 +2615,7 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
                          })
                          # Turn does not end yet
                     else:
-                        await room_manager.end_turn(room_id, check_win=True)
+                        await room_manager.end_turn(room_id)
 
             elif msg_type == "use_ability":
                 if not player.pending_ability:
@@ -2622,12 +2729,15 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
                 })
 
             elif msg_type == "leave_room":
-                if room.status not in (GameStatus.WAITING, GameStatus.FINISHED):
-                    await websocket.send_json({"type": "error", "message": "You can only leave between rounds"})
-                    continue
-
+                # Deliberately leaving is always allowed, active round or not -
+                # a dropped connection gets a reconnect grace period instead
+                # (see mark_player_disconnected), but a player who explicitly
+                # asks to leave shouldn't be blocked or made to wait for one.
                 removed_name = player.username
-                updated_room, _, deleted_room = room_manager.remove_player_from_room(room_id, player_id)
+                updated_room, _, deleted_room = await room_manager.remove_player_from_game(room_id, player_id)
+                if updated_room and not deleted_room and updated_room.status == GameStatus.PLAYING:
+                    room_manager.schedule_bot_turn(room_id)
+
                 await websocket.send_json({
                     "type": "left_room",
                     "data": {
@@ -2641,6 +2751,7 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
                         "data": {
                             "player_id": player_id,
                             "username": removed_name,
+                            "message": f"{removed_name} left the room.",
                             "room": updated_room.model_dump(mode='json')
                         }
                     }, exclude_player=player_id)
@@ -2724,6 +2835,13 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
                 room.game_state.cambio_called = True
                 room.game_state.cambio_caller = player_id
                 # final_round_turns will be initialized in next_turn()
+
+                # The caller's hand is now frozen - anyone who still owed them
+                # an elimination replacement can no longer deliver it.
+                await room_manager.release_replacement_debts_to(
+                    room_id, player_id,
+                    f"{player.username} called Cambio and is now immune. That replacement obligation was cancelled."
+                )
 
                 await room_manager.broadcast_to_room(room_id, {
                     "type": "cambio_called",
@@ -2822,7 +2940,13 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
                         # turn; a bad off-turn guess must not advance somebody
                         # else's active turn.
                         if room.game_state.current_turn == player_id:
-                            await room_manager.end_turn(room_id, check_win=True)
+                            # A still-undecided deck draw from earlier this
+                            # turn must not lose its ability just because the
+                            # turn is ending via this penalty instead of a
+                            # deliberate resolve_draw discard.
+                            opened_ability = await room_manager.discard_pending_drawn_card(room_id, player, websocket)
+                            if not opened_ability:
+                                await room_manager.end_turn(room_id)
                     continue
 
                 removed_card = target_player.hand[target_index]
@@ -2863,10 +2987,24 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
                         or replacement_index >= len(player.hand) or player.hand[replacement_index] is None):
                     await websocket.send_json({"type": "error", "message": "Choose one of your remaining cards as the replacement"})
                     continue
+                # The caller's hand is frozen for the rest of the final round -
+                # this mirrors the same check every other swap/ability path
+                # already makes before touching an immune player's hand.
+                if room.game_state.cambio_caller == target_player.player_id:
+                    player.pending_replacement_target = None
+                    await websocket.send_json({
+                        "type": "error",
+                        "message": f"{target_player.username} called Cambio and is now immune. That replacement obligation was cancelled."
+                    })
+                    continue
                 replacement_card = player.hand[replacement_index]
                 player.hand[replacement_index] = None
                 target_player.hand[target_index] = replacement_card
                 player.pending_replacement_target = None
+                if room.game_state.current_turn == player.player_id:
+                    # Resume this player's turn timer with a fresh window now
+                    # that their paused "choose a replacement" decision is over.
+                    room.game_state.turn_started_at = utc_now()
                 await room_manager.broadcast_to_room(room_id, {
                     "type": "replacement_given",
                     "data": {
@@ -2879,41 +3017,6 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
                     }
                 })
 
-            elif msg_type == "reveal_card":
-                # Reveal a card to other players (memory aspect of Cambio)
-                card_data = message.get("data", {}).get("card")
-                if not card_data:
-                    await websocket.send_json({
-                        "type": "error",
-                        "message": "Card data required"
-                    })
-                    continue
-                
-                card = Card(**card_data)
-                
-                # Check if player has the card
-                if not any(c and c.suit == card.suit and c.rank == card.rank for c in player.hand):
-                    await websocket.send_json({
-                        "type": "error",
-                        "message": "Card not in hand"
-                    })
-                    continue
-                
-                # Add to revealed cards
-                if player_id not in room.game_state.revealed_cards:
-                    room.game_state.revealed_cards[player_id] = []
-                room.game_state.revealed_cards[player_id].append(card)
-                
-                # Broadcast to all players
-                await room_manager.broadcast_to_room(room_id, {
-                    "type": "card_revealed",
-                    "data": {
-                        "player_id": player_id,
-                        "card": card.model_dump(mode='json'),
-                        "room": room.model_dump(mode='json')
-                    }
-                })
-            
             elif msg_type == "game_state_request":
                 # Send current game state
                 await websocket.send_json({
@@ -2989,25 +3092,29 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
             except (asyncio.CancelledError, Exception):
                 pass
 
-        # Clean up connection and remove dropped players from the room.
+        # Clean up the socket, but keep the player's seat open for a grace
+        # period so a network blip or refresh can reconnect instead of
+        # permanently ejecting them mid-game - see mark_player_disconnected.
         if player_id and room_id:
             resolved_room_id = room_manager._resolve_room_id(room_id)
             active_socket = room_manager.room_connections.get(resolved_room_id, {}).get(player_id)
             if active_socket is websocket:
-                updated_room, removed_player, deleted_room = room_manager.disconnect_player_from_room(room_id, player_id)
-                if updated_room and not deleted_room:
-                    if updated_room.status == GameStatus.PLAYING:
-                        room_manager.schedule_bot_turn(room_id)
-
-                await room_manager.broadcast_to_room(room_id, {
-                    "type": "player_left",
-                    "data": {
-                        "player_id": player_id,
-                        "username": removed_player.username if removed_player else None,
-                        "message": f"{removed_player.username} disconnected and was removed from the room." if removed_player else "A player disconnected and was removed from the room.",
-                        "room": updated_room.model_dump(mode='json') if updated_room else None
-                    }
-                }, exclude_player=player_id)
+                updated_room = room_manager.mark_player_disconnected(room_id, player_id)
+                if updated_room:
+                    room_manager.schedule_disconnect_grace(room_id, player_id)
+                    disconnected_player = next(
+                        (p for p in updated_room.players if p.player_id == player_id), None
+                    )
+                    await room_manager.broadcast_to_room(room_id, {
+                        "type": "player_disconnected",
+                        "data": {
+                            "player_id": player_id,
+                            "username": disconnected_player.username if disconnected_player else None,
+                            "message": f"{disconnected_player.username} disconnected. They have {DISCONNECT_GRACE_PERIOD_SECONDS} seconds to reconnect before their seat is given up." if disconnected_player else "A player disconnected.",
+                            "grace_period_seconds": DISCONNECT_GRACE_PERIOD_SECONDS,
+                            "room": updated_room.model_dump(mode='json')
+                        }
+                    }, exclude_player=player_id)
 
 if __name__ == "__main__":
     import uvicorn
