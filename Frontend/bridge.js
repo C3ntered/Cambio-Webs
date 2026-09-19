@@ -481,15 +481,27 @@ function handleSocketMessage(event) {
             notify(`Penalty: You drew a face-down penalty card.`);
             recordAction(message.data.message || 'Penalty: drew a face-down penalty card', 'alert');
             break;
-        case 'replacement_given':
+        case 'replacement_given': {
             eliminationTarget = null;
-            latestRoomState = message.data.room;
             notify(message.data.message);
             recordAction(message.data.message, 'swap');
-            renderBoard(message.data.room, playerContext.playerId);
-            if (message.data.player1_id !== undefined) highlightCard(message.data.player1_id, message.data.card1_index);
-            if (message.data.player2_id !== undefined) highlightCard(message.data.player2_id, message.data.card2_index);
+
+            const { player1_id: giverId, card1_index: giverIndex, player2_id: recipientId, card2_index: recipientIndex } = message.data;
+
+            const finishReplacement = () => {
+                latestRoomState = message.data.room;
+                renderBoard(latestRoomState, playerContext.playerId);
+                if (giverId !== undefined) highlightCard(giverId, giverIndex);
+                if (recipientId !== undefined) highlightCard(recipientId, recipientIndex);
+            };
+
+            if (giverId !== undefined && giverIndex !== undefined && recipientId !== undefined && recipientIndex !== undefined) {
+                animateHandTransfer(giverId, giverIndex, recipientId, recipientIndex, finishReplacement);
+            } else {
+                finishReplacement();
+            }
             break;
+        }
         case 'cards_swapped':
             console.log('cards_swapped message received', message.data);
             pendingDrawnCard = null; // Ensure draw state is cleared
@@ -2432,7 +2444,15 @@ function findCardElement(pid, idx, roomState, myPlayerId) {
 }
 
 /**
- * Animate two rendered cards trading places.
+ * Animate two rendered cards (typically from two different hands, via a
+ * blind-swap/look-and-swap ability) trading places.
+ *
+ * Both origin slots stay visible and glow with the same "REPLACING" marker
+ * used for pile draws, so the exchange reads clearly even to players who
+ * aren't holding either card. The clones' travel time must match the
+ * `.swapping-clone` CSS transition (DRAW_SWAP_TRAVEL_MS) - cutting the
+ * timeout shorter than the transition makes the cards visibly teleport
+ * instead of sliding, which is what made this animation feel broken.
  */
 function animateSwap(player1_id, card1_index, player2_id, card2_index, callback) {
     console.log('animateSwap called:', player1_id, card1_index, player2_id, card2_index);
@@ -2452,58 +2472,101 @@ function animateSwap(player1_id, card1_index, player2_id, card2_index, callback)
     const rect1 = el1.getBoundingClientRect();
     const rect2 = el2.getBoundingClientRect();
 
-    // Create clones
     const clone1 = el1.cloneNode(true);
     const clone2 = el2.cloneNode(true);
 
-    clone1.classList.add('swapping-clone');
-    clone2.classList.add('swapping-clone');
+    clone1.classList.add('swapping-clone', 'swap-incoming');
+    clone2.classList.add('swapping-clone', 'swap-incoming');
+    addSwapMotionLabel(clone1, 'Swapping');
+    addSwapMotionLabel(clone2, 'Swapping');
 
-    // Style clones
-    function styleClone(clone, rect) {
-        clone.style.position = 'fixed';
-        clone.style.top = rect.top + 'px';
-        clone.style.left = rect.left + 'px';
-        clone.style.width = rect.width + 'px';
-        clone.style.height = rect.height + 'px';
-        clone.style.margin = '0';
-        clone.style.transform = 'none';
-        clone.style.zIndex = '9999';
-        clone.style.pointerEvents = 'none';
-        document.body.appendChild(clone);
-    }
+    styleFixedClone(clone1, rect1);
+    styleFixedClone(clone2, rect2);
+    document.body.appendChild(clone1);
+    document.body.appendChild(clone2);
 
-    styleClone(clone1, rect1);
-    styleClone(clone2, rect2);
-
-    // Hide originals
-    el1.style.visibility = 'hidden';
-    el2.style.visibility = 'hidden';
+    // Leave both origin slots visible (not hidden) so their pulsing
+    // "REPLACING" marker stays on screen for the whole exchange - it's what
+    // makes the swap obvious before the clones finish crossing.
+    el1.classList.add('swap-target-slot');
+    el2.classList.add('swap-target-slot');
 
     // Force layout
     void clone1.offsetHeight;
 
-    // Animate
-    requestAnimationFrame(() => {
-        clone1.style.top = rect2.top + 'px';
-        clone1.style.left = rect2.left + 'px';
+    setTimeout(() => {
+        requestAnimationFrame(() => {
+            clone1.style.top = rect2.top + 'px';
+            clone1.style.left = rect2.left + 'px';
 
-        clone2.style.top = rect1.top + 'px';
-        clone2.style.left = rect1.left + 'px';
-    });
+            clone2.style.top = rect1.top + 'px';
+            clone2.style.left = rect1.left + 'px';
+        });
+
+        setTimeout(() => {
+            if (clone1.parentNode) document.body.removeChild(clone1);
+            if (clone2.parentNode) document.body.removeChild(clone2);
+
+            el1.classList.remove('swap-target-slot');
+            el2.classList.remove('swap-target-slot');
+
+            isAnimating = false;
+            console.log('Animation finished, calling callback');
+            if (callback) callback();
+        }, DRAW_SWAP_TRAVEL_MS);
+    }, DRAW_SWAP_STAGE_MS);
+}
+
+/**
+ * Animate a single card moving from one player's hand directly into another
+ * player's (now-empty) hand slot - the elimination "give a replacement"
+ * flow. Mirrors animateDrawSwap's staged pulse-then-travel timing so all the
+ * swap animations feel consistent.
+ */
+function animateHandTransfer(fromPlayerId, fromIndex, toPlayerId, toIndex, callback) {
+    console.log('animateHandTransfer called:', fromPlayerId, fromIndex, toPlayerId, toIndex);
+    isAnimating = true;
+
+    const source = findCardElement(fromPlayerId, fromIndex, latestRoomState, playerContext.playerId);
+    const target = findCardElement(toPlayerId, toIndex, latestRoomState, playerContext.playerId);
+
+    if (!source || !target) {
+        console.warn('animateHandTransfer: Elements not found. source:', !!source, 'target:', !!target);
+        isAnimating = false;
+        if (callback) callback();
+        return;
+    }
+
+    const sourceRect = source.getBoundingClientRect();
+    const targetRect = target.getBoundingClientRect();
+
+    const incoming = source.cloneNode(true);
+    incoming.classList.add('swapping-clone', 'swap-incoming');
+    addSwapMotionLabel(incoming, 'Replacement');
+    styleFixedClone(incoming, sourceRect);
+    document.body.appendChild(incoming);
+
+    target.classList.add('swap-target-slot');
+    source.classList.add('swap-source-pulse');
+
+    void incoming.offsetHeight;
 
     setTimeout(() => {
-        if (clone1.parentNode) document.body.removeChild(clone1);
-        if (clone2.parentNode) document.body.removeChild(clone2);
+        requestAnimationFrame(() => {
+            incoming.style.top = targetRect.top + 'px';
+            incoming.style.left = targetRect.left + 'px';
+            incoming.style.width = targetRect.width + 'px';
+            incoming.style.height = targetRect.height + 'px';
+        });
 
-        // Restore visibility of original elements
-        el1.style.visibility = 'visible';
-        el2.style.visibility = 'visible';
-
-        isAnimating = false;
-        console.log('Animation finished, calling callback');
-        if (callback) callback();
-    }, 700);
+        setTimeout(() => {
+            if (incoming.parentNode) document.body.removeChild(incoming);
+            target.classList.remove('swap-target-slot');
+            source.classList.remove('swap-source-pulse');
+            isAnimating = false;
+            if (callback) callback();
+        }, DRAW_SWAP_TRAVEL_MS);
+    }, DRAW_SWAP_STAGE_MS);
 }
 
 /**

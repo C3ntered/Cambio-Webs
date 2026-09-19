@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "cambio-backend",
+      "runtimeExecutable": "/Users/kaiholland/Cambio-Webs/.venv/bin/python",
+      "runtimeArgs": ["Backend/backend.py"],
+      "port": 8000
+    }
+  ]
+}
