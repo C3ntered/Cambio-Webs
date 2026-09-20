@@ -1,9 +1,10 @@
 <!--
     Cambio instructions page
     Author: Kai Holland
-    AI assistance/co-authoring: OpenAI ChatGPT/Codex, Anthropic Claude for debugging,
-    and Google Jules for most of Frontend/bridge.js.
-    Last updated: 2026-06-30
+    AI assistance/co-authoring: OpenAI ChatGPT/Codex, Anthropic Claude for game-logic
+    bug fixes, reconnection support, bot AI, cleanup, and documentation, and Google
+    Jules for most of Frontend/bridge.js.
+    Last updated: 2026-09-19
 -->
 <!DOCTYPE html>
 <html lang="en">
@@ -259,7 +260,7 @@
 <body>
     <header>
         <h1>How to Play Cambio</h1>
-        <p>Cambio is a memory card game where you try to finish with the lowest score. The trick is that most cards stay face down, so every peek, swap, and guess matters.</p>
+        <p>Cambio is a memory game: finish with the lowest score. Most of your cards stay face down the whole game, so every peek, swap, and guess counts.</p>
         <nav class="top-links" aria-label="Rules links">
             <a href="/">Back to Game</a>
             <a href="/static/rules.pdf" target="_blank">Open PDF</a>
@@ -285,24 +286,25 @@
                     </div>
                 </div>
                 <ol>
-                    <li>Each player starts with face-down cards in a two-row grid.</li>
-                    <li>On your turn, draw from the deck or take the top discard.</li>
-                    <li>If you draw from the deck, either swap it with one of your cards or discard it.</li>
-                    <li>If you draw from the discard pile, you must swap it with one of your cards.</li>
-                    <li>When you think you have the lowest hand, call Cambio to trigger the final round.</li>
+                    <li>Each player starts with face-down cards in a two-row grid and briefly memorizes the bottom row.</li>
+                    <li>On your turn, draw from the deck or take the top of the discard pile.</li>
+                    <li>Drew from the deck? Swap it into your hand, or discard it and use its ability if it has one.</li>
+                    <li>Drew from the discard pile? You must swap it into your hand - no ability, no discarding it back.</li>
+                    <li>Think a face-down card matches the top discard's rank? Eliminate it - on anyone's turn, including your own.</li>
+                    <li>When you think your hand is the lowest, call Cambio at the start of your turn to trigger the final round.</li>
                 </ol>
             </section>
 
             <section>
                 <h2>Example Hand</h2>
                 <p>Your cards stay in fixed slots. Eliminated cards leave empty spaces instead of sliding the hand around.</p>
-                <div class="example-hand" aria-label="Example two by two hand">
+                <div class="example-hand" aria-label="Example two by two hand: top row face down, bottom row memorized">
+                    <div class="mini-card back">?</div>
                     <div class="mini-card back">?</div>
                     <div class="mini-card red">7♥</div>
                     <div class="mini-card">K♣</div>
-                    <div class="mini-card back">?</div>
                 </div>
-                <p class="note">At game start, the bottom row is briefly visible so you can memorize it.</p>
+                <p class="note">At game start, only the bottom row is briefly revealed so you can memorize it — the top row stays face down the whole game unless you peek at it with a card ability.</p>
             </section>
 
             <section>
@@ -321,15 +323,15 @@
                         </tr>
                         <tr>
                             <td>9 or 10</td>
-                            <td>Peek at one opponent card.</td>
+                            <td>Peek at one card belonging to any opponent.</td>
                         </tr>
                         <tr>
                             <td>Jack or Queen</td>
-                            <td>Blind swap any two cards without looking.</td>
+                            <td>Swap any two cards, yours or an opponent's, without seeing either one first.</td>
                         </tr>
                         <tr>
                             <td>Black King</td>
-                            <td>Look at two cards, then choose whether to swap them.</td>
+                            <td>Look at any two cards, then decide whether to swap them.</td>
                         </tr>
                     </tbody>
                 </table>
@@ -339,21 +341,16 @@
                 <h2>FAQ</h2>
                 <details open>
                     <summary>How do eliminations work?</summary>
-                    <p>If you think another face-down card matches the top discard rank, click it. If you are right, that card is eliminated. If you eliminate an opponent card, you give them one of your cards as a replacement.</p>
+                    <p>If you think a face-down card matches the top discard's rank, click it - on any turn, even someone else's. Guess right and that card is eliminated. Eliminate an opponent's card and you must give them one of your own cards as a replacement.</p>
                 </details>
                 <details>
                     <summary>What happens if I guess wrong?</summary>
-                    <p>You draw a penalty card, and your turn ends.</p>
+                    <p>You draw a penalty card and, if it was your turn, your turn ends.</p>
                 </details>
                 <details>
                     <summary>When should I call Cambio?</summary>
-                    <p>Call Cambio when you think your total is lower than everyone else's. After that, the table gets a final round before scores are counted.</p>
+                    <p>Call Cambio at the start of your turn, before drawing, when you think your total is lower than everyone else's. Every other player then gets one last turn before scores are counted, and your own hand is locked in and can no longer be swapped or eliminated.</p>
                 </details>
-                <!-- ADMIN MODE - Disabled for production -->
-                <!-- <details>
-                    <summary>What is Admin Mode?</summary>
-                    <p>Admin Mode reveals all cards on your own device. It is useful for testing or teaching, but not regular play.</p>
-                </details> -->
             </section>
         </div>
 
