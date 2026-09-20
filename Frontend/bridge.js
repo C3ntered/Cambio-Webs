@@ -2206,7 +2206,7 @@ function updateRoomSettings() {
  */
 function addBotToRoom() {
     if (!latestRoomState) return;
-    sendMessage('add_bot', { bot_name: 'Cambio Bot' });
+    sendMessage('add_bot', { bot_name: 'Edward' });
 }
 
 function leaveRoom() {
