@@ -12,6 +12,11 @@ from Backend.backend import (
     get_card_value,
 )
 
+
+async def _instant_bot_sleep(delay_range):
+    """Replaces GameRoomManager._bot_sleep in tests so bot pacing delays don't slow the suite."""
+    return None
+
 def test_deck_auto_adjustment_below_threshold():
     manager = GameRoomManager()
 
@@ -560,3 +565,209 @@ def test_reconnect_within_grace_period_cancels_pending_removal():
         assert any(p.player_id == player2_id for p in room.players)
 
     asyncio.run(scenario())
+
+
+def test_bot_calls_cambio_with_a_low_score_hand_but_not_a_high_one():
+    manager = GameRoomManager()
+    room = manager.create_room(username="Player1", play_with_bot=True)
+    bot = next(player for player in room.players if player.is_bot)
+
+    bot.hand = [
+        Card(suit="Clubs", rank="Ace"),
+        Card(suit="Spades", rank="2"),
+    ]
+    assert manager._bot_should_call_cambio(room, bot) is True
+
+    bot.hand = [
+        Card(suit="Clubs", rank="King"),
+        Card(suit="Spades", rank="Queen"),
+    ]
+    assert manager._bot_should_call_cambio(room, bot) is False
+
+    room.game_state.cambio_called = True
+    bot.hand = [Card(suit="Clubs", rank="Ace")]
+    assert manager._bot_should_call_cambio(room, bot) is False
+
+
+def test_bot_perform_cambio_call_freezes_caller_and_ends_turn():
+    manager = GameRoomManager()
+    room = manager.create_room(username="Player1", play_with_bot=True)
+    manager.start_game(room.room_id)
+    room.game_state.viewing_phase = False
+    room.game_state.game_phase = "playing"
+    bot = next(player for player in room.players if player.is_bot)
+    room.game_state.current_turn = bot.player_id
+
+    result = asyncio.run(manager.perform_cambio_call(room.room_id, bot.player_id))
+
+    assert result is True
+    assert room.game_state.cambio_called is True
+    assert room.game_state.cambio_caller == bot.player_id
+    # end_turn was invoked, so the turn already moved on to the other player.
+    assert room.game_state.current_turn != bot.player_id
+
+
+def test_bot_plan_swap_skips_a_blind_trade_when_its_own_card_is_already_good():
+    manager = GameRoomManager()
+    room = manager.create_room(username="Player1", play_with_bot=True)
+    bot = next(player for player in room.players if player.is_bot)
+    human = next(player for player in room.players if not player.is_bot)
+
+    bot.hand = [Card(suit="Clubs", rank="2")]
+    human.hand = [Card(suit="Diamonds", rank="Ace")]
+
+    assert manager._bot_plan_swap(room, bot) is None
+
+
+def test_bot_plan_swap_trades_away_a_bad_card_blindly():
+    manager = GameRoomManager()
+    room = manager.create_room(username="Player1", play_with_bot=True)
+    bot = next(player for player in room.players if player.is_bot)
+    human = next(player for player in room.players if not player.is_bot)
+
+    bot.hand = [Card(suit="Spades", rank="King")]  # black King: value 10, well above threshold
+    human.hand = [Card(suit="Diamonds", rank="Ace")]
+
+    plan = manager._bot_plan_swap(room, bot)
+
+    assert plan == ((bot.player_id, 0), (human.player_id, 0))
+
+
+def test_bot_plan_swap_prefers_a_known_bad_opponent_card_over_a_blind_trade():
+    manager = GameRoomManager()
+    room = manager.create_room(username="Player1", play_with_bot=True)
+    bot = next(player for player in room.players if player.is_bot)
+    human = next(player for player in room.players if not player.is_bot)
+
+    # The bot's own card isn't bad enough to trade away blindly...
+    bot.hand = [Card(suit="Clubs", rank="4")]
+    human.hand = [Card(suit="Diamonds", rank="Ace")]
+    manager._bot_remember_card(room.room_id, bot.player_id, human.player_id, 0, Card(suit="Diamonds", rank="Ace"))
+
+    # ...but a remembered opponent card that's known to be even better tips the trade.
+    plan = manager._bot_plan_swap(room, bot)
+
+    assert plan == ((bot.player_id, 0), (human.player_id, 0))
+
+
+def test_bot_wants_swap_only_when_the_other_card_is_an_upgrade():
+    manager = GameRoomManager()
+    room = manager.create_room(username="Player1", play_with_bot=True)
+
+    king = Card(suit="Spades", rank="King")
+    ace = Card(suit="Clubs", rank="Ace")
+
+    assert manager._bot_wants_swap(room, king, ace) is True
+    assert manager._bot_wants_swap(room, ace, king) is False
+    assert manager._bot_wants_swap(room, None, ace) is False
+
+
+def test_bot_uses_peek_other_ability_and_remembers_the_card():
+    async def scenario():
+        manager = GameRoomManager()
+        room = manager.create_room(username="Player1", play_with_bot=True)
+        manager._bot_sleep = _instant_bot_sleep
+        bot = next(player for player in room.players if player.is_bot)
+        human = next(player for player in room.players if not player.is_bot)
+        human.hand = [Card(suit="Hearts", rank="7")]
+
+        bot.pending_ability = "peek_other"
+        await manager._bot_use_pending_ability(room.room_id, bot)
+
+        assert bot.pending_ability is None
+        memory = manager.bot_opponent_memory.get((room.room_id, bot.player_id), {})
+        assert memory.get((human.player_id, 0)) == human.hand[0]
+
+    asyncio.run(scenario())
+
+
+def test_bot_uses_blind_swap_ability_to_offload_its_worst_card():
+    async def scenario():
+        manager = GameRoomManager()
+        room = manager.create_room(username="Player1", play_with_bot=True)
+        manager._bot_sleep = _instant_bot_sleep
+        bot = next(player for player in room.players if player.is_bot)
+        human = next(player for player in room.players if not player.is_bot)
+
+        bot.hand = [Card(suit="Spades", rank="King")]
+        human.hand = [Card(suit="Diamonds", rank="Ace")]
+
+        bot.pending_ability = "blind_swap"
+        await manager._bot_use_pending_ability(room.room_id, bot)
+
+        assert bot.pending_ability is None
+        assert bot.hand[0] == Card(suit="Diamonds", rank="Ace")
+        assert human.hand[0] == Card(suit="Spades", rank="King")
+
+    asyncio.run(scenario())
+
+
+def test_bot_look_and_swap_takes_a_confirmed_upgrade():
+    async def scenario():
+        manager = GameRoomManager()
+        room = manager.create_room(username="Player1", play_with_bot=True)
+        manager._bot_sleep = _instant_bot_sleep
+        bot = next(player for player in room.players if player.is_bot)
+        human = next(player for player in room.players if not player.is_bot)
+
+        bot.hand = [Card(suit="Spades", rank="King")]
+        human.hand = [Card(suit="Diamonds", rank="2")]
+
+        bot.pending_ability = "look_and_swap"
+        await manager._bot_use_pending_ability(room.room_id, bot)
+
+        assert bot.pending_ability is None
+        assert bot.pending_swap_targets is None
+        assert bot.hand[0] == Card(suit="Diamonds", rank="2")
+        assert human.hand[0] == Card(suit="Spades", rank="King")
+
+    asyncio.run(scenario())
+
+
+def test_bot_look_and_swap_declines_a_worse_trade():
+    async def scenario():
+        manager = GameRoomManager()
+        room = manager.create_room(username="Player1", play_with_bot=True)
+        manager._bot_sleep = _instant_bot_sleep
+        bot = next(player for player in room.players if player.is_bot)
+        human = next(player for player in room.players if not player.is_bot)
+
+        bot.hand = [Card(suit="Spades", rank="King")]
+        human.hand = [Card(suit="Diamonds", rank="Queen")]
+
+        bot.pending_ability = "look_and_swap"
+        await manager._bot_use_pending_ability(room.room_id, bot)
+
+        assert bot.pending_ability is None
+        assert bot.hand[0] == Card(suit="Spades", rank="King")
+        assert human.hand[0] == Card(suit="Diamonds", rank="Queen")
+
+    asyncio.run(scenario())
+
+
+def test_start_game_clears_stale_bot_memory_from_the_previous_deal():
+    manager = GameRoomManager()
+    room = manager.create_room(username="Player1", play_with_bot=True)
+    bot = next(player for player in room.players if player.is_bot)
+    human = next(player for player in room.players if not player.is_bot)
+    manager._bot_remember_card(room.room_id, bot.player_id, human.player_id, 0, Card(suit="Hearts", rank="7"))
+
+    manager.start_game(room.room_id)
+
+    assert manager.bot_opponent_memory.get((room.room_id, bot.player_id), {}) == {}
+
+
+def test_departing_player_forgets_their_slots_from_bot_memory():
+    manager = GameRoomManager()
+    room = manager.create_room(username="Player1", play_with_bot=True)
+    _, player2_id = manager.join_room(room.room_id, "Player2")
+    manager.start_game(room.room_id)
+    room.status = GameStatus.PLAYING
+    room.game_state.game_phase = "playing"
+    bot = next(player for player in room.players if player.is_bot)
+    manager._bot_remember_card(room.room_id, bot.player_id, player2_id, 0, Card(suit="Hearts", rank="7"))
+
+    asyncio.run(manager.remove_player_from_game(room.room_id, player2_id))
+
+    memory = manager.bot_opponent_memory.get((room.room_id, bot.player_id), {})
+    assert (player2_id, 0) not in memory

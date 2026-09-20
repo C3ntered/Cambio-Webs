@@ -524,29 +524,29 @@
 
         #cambio-announcement {
             position: fixed;
-            inset: 50% auto auto 50%;
+            inset: auto auto 24px 50%;
             z-index: 5000;
-            width: min(88vw, 680px);
-            transform: translate(-50%, -50%) scale(.7);
-            padding: 28px 34px;
-            border: 5px solid white;
-            border-radius: 24px;
-            background: linear-gradient(135deg, #f97316, #dc2626 55%, #7c3aed);
+            width: min(80vw, 340px);
+            transform: translate(-50%, 0) scale(.85);
+            padding: 12px 20px;
+            border: 2px solid rgba(255,255,255,.85);
+            border-radius: 14px;
+            background: linear-gradient(135deg, #f97316, #dc2626 65%);
             color: white;
             text-align: center;
-            font-size: clamp(28px, 7vw, 64px);
-            font-weight: 1000;
-            letter-spacing: .04em;
-            box-shadow: 0 25px 80px rgba(0,0,0,.55);
+            font-size: clamp(16px, 3.2vw, 22px);
+            font-weight: 700;
+            letter-spacing: .02em;
+            box-shadow: 0 10px 30px rgba(0,0,0,.35);
             opacity: 0;
             pointer-events: none;
         }
 
-        #cambio-announcement.show { animation: cambio-pop 3.2s ease both; }
+        #cambio-announcement.show { animation: cambio-pop 2.2s ease both; }
         @keyframes cambio-pop {
-            0% { opacity: 0; transform: translate(-50%, -50%) scale(.6) rotate(-4deg); }
-            12%, 78% { opacity: 1; transform: translate(-50%, -50%) scale(1); }
-            100% { opacity: 0; transform: translate(-50%, -50%) scale(1.08); }
+            0% { opacity: 0; transform: translate(-50%, 8px) scale(.9); }
+            15%, 75% { opacity: 1; transform: translate(-50%, 0) scale(1); }
+            100% { opacity: 0; transform: translate(-50%, 0) scale(.96); }
         }
 
         #card-container button:hover {

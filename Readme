@@ -14,8 +14,13 @@ Live site: https://cambiogame.com
 - Shareable room links such as `/join/ABC123`.
 - Configurable starting hand size and deck count.
 - Optional 60-second turn timer to prevent AFK turns from freezing a room.
-- Single-player practice mode with a basic AI opponent.
-- Mobile-friendly table layout with opponent hands, deck/discard, and your hand.
+- Automatic reconnection: a dropped connection or page refresh rejoins the
+  same room and hand within a 90-second grace period instead of losing the
+  seat.
+- Single-player practice mode with an AI opponent that uses card abilities
+  and calls Cambio, not just draw/swap/discard.
+- Mobile-friendly table layout with opponent hands, deck/discard, and your
+  hand.
 - Grace-period scoring after Cambio is called.
 - Stale-room cleanup to keep server memory usage low.
 
@@ -28,15 +33,18 @@ Live site: https://cambiogame.com
 ## Project Structure
 
 - `Backend/backend.py`: FastAPI app, REST endpoints, WebSocket handler, room
-  manager, scoring, cleanup, timers, and bot behavior.
-- `Backend/test_*.py`: Backend tests for deck logic, room management, cleanup,
-  scoring, and win-condition edge cases.
+  manager, scoring, cleanup, reconnection, timers, and bot behavior.
+- `Backend/test_room_manager.py`: Backend tests for deck logic, room
+  management, reconnection, cleanup, scoring, and win-condition edge cases.
 - `Frontend/index.html`: Main app markup and CSS.
 - `Frontend/bridge.js`: Browser-side state bridge for API calls, WebSocket
-  events, rendering, animations, and lobby actions.
+  events, rendering, animations, session persistence/reconnection, and lobby
+  actions.
 - `Frontend/instructions.html`: Player-facing rules page.
 - `Frontend/rules.pdf`: Downloadable rules reference.
-- `GAME_MECHANICS_REFERENCE.md`: Notes for game rules and implementation.
+- `GAME_MECHANICS_REFERENCE.md`: Gameplay rules and a code map from each rule
+  to the backend/frontend code that implements it - read this first when
+  reviewing a gameplay change.
 
 ## Local Development
 
@@ -85,7 +93,10 @@ AI assistance and co-authoring:
 
 - OpenAI ChatGPT/Codex: code generation, optimization, documentation, and
   implementation assistance.
-- Anthropic Claude: debugging assistance.
+- Anthropic Claude: game-logic bug fixes (turn order, elimination/ability
+  edge cases), reconnection support, the practice bot's ability usage and
+  Cambio-calling AI, code cleanup across the backend and frontend, and
+  documentation.
 - Google Jules: wrote most of `Frontend/bridge.js` and assisted with game-logic
   development.
 

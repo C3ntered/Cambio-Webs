@@ -987,7 +987,7 @@ function showCambioAnnouncement(message) {
     banner.classList.remove('show');
     void banner.offsetWidth;
     banner.classList.add('show');
-    setTimeout(() => banner.classList.remove('show'), 3200);
+    setTimeout(() => banner.classList.remove('show'), 2200);
 }
 
 /**
@@ -2206,7 +2206,7 @@ function updateRoomSettings() {
  */
 function addBotToRoom() {
     if (!latestRoomState) return;
-    sendMessage('add_bot', { bot_name: 'Cambio Bot' });
+    sendMessage('add_bot', { bot_name: 'Edward' });
 }
 
 function leaveRoom() {
